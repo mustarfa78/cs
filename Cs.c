@@ -91,6 +91,9 @@ int main(void) {
 
     printf("--- Map Setup ---\n");
 
+    int snake_row = NO_SNAKE;
+    int snake_col = NO_SNAKE;
+
     char command;
     while (scanf(" %c", &command) == 1) {
         if (command == 's') {
@@ -116,12 +119,48 @@ int main(void) {
                     board[row][col].entity = APPLE_NORMAL;
                 }
             }
+        } else if (command == 'p') {
+            int row;
+            int col;
+            if (scanf(" %d %d", &row, &col) == 2) {
+                snake_row = row;
+                snake_col = col;
+                board[row][col].entity = BODY_SEGMENT;
+            }
         }
     }
 
-    print_board(board, NO_SNAKE, NO_SNAKE);
+    print_board(board, snake_row, snake_col);
 
-    return 0;
+    printf("--- Gameplay Phase ---\n");
+
+    char gameplay_command;
+    while (1) {
+        int scan_result = scanf(" %c", &gameplay_command);
+        if (scan_result == EOF) {
+            printf("--- Quitting Game ---\n");
+            return 0;
+        }
+
+        int previous_row = snake_row;
+        int previous_col = snake_col;
+
+        if (gameplay_command == 'w') {
+            snake_row--;
+        } else if (gameplay_command == 'a') {
+            snake_col--;
+        } else if (gameplay_command == 's') {
+            snake_row++;
+        } else if (gameplay_command == 'd') {
+            snake_col++;
+        }
+
+        if (previous_row != NO_SNAKE && previous_col != NO_SNAKE) {
+            board[previous_row][previous_col].entity = BODY_SEGMENT;
+        }
+
+        print_board(board, snake_row, snake_col);
+    }
 }
 
 // Add your function definitions below this line
