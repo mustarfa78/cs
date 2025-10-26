@@ -89,6 +89,36 @@ int main(void) {
     struct tile board[ROWS][COLS];
     initialise_board(board);
 
+    printf("--- Map Setup ---\n");
+
+    char command;
+    while (scanf(" %c", &command) == 1) {
+        if (command == 's') {
+            break;
+        } else if (command == 'w') {
+            int row;
+            int col;
+            if (scanf(" %d %d", &row, &col) == 2) {
+                board[row][col].entity = WALL;
+            }
+        } else if (command == 'e') {
+            int row;
+            int col;
+            if (scanf(" %d %d", &row, &col) == 2) {
+                board[row][col].entity = EXIT_LOCKED;
+            }
+        } else if (command == 'a') {
+            char apple_type;
+            int row;
+            int col;
+            if (scanf(" %c %d %d", &apple_type, &row, &col) == 3) {
+                if (apple_type == 'n') {
+                    board[row][col].entity = APPLE_NORMAL;
+                }
+            }
+        }
+    }
+
     print_board(board, NO_SNAKE, NO_SNAKE);
 
     return 0;
