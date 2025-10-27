@@ -18,6 +18,9 @@
 #define MAX_SNAKE_LENGTH (ROWS * COLS)
 #define MAX_PORTAL_PAIRS 5
 #define MAX_EXPLOSIONS (ROWS * COLS)
+#define EXPLOSION_ORIGINAL 1
+#define EXPLOSION_RIVAL 2
+#define EXPLOSION_NONE 0
 
 // Add your own #define constants below this line
 
@@ -67,6 +70,17 @@ struct snake_body {
     int head_col;
 };
 
+enum snake_id {
+    SNAKE_ORIGINAL = 0,
+    SNAKE_RIVAL = 1
+};
+
+struct snake_statistics {
+    int points;
+    int moves_made;
+    int apples_eaten;
+};
+
 struct explosion {
     int row;
     int col;
@@ -78,12 +92,15 @@ struct explosion {
 struct game_state {
     struct tile board[ROWS][COLS];
     struct snake_body snake;
+    struct snake_body rival_snake;
     struct portal_pairs portals;
+    struct snake_statistics original_stats;
+    struct snake_statistics rival_stats;
+    int has_rival;
+    enum snake_id current_turn;
     int apples_initial;
     int apples_remaining;
-    int apples_eaten;
-    int points;
-    int moves_made;
+    int apples_removed_total;
     int points_remaining_total;
     struct explosion explosions[MAX_EXPLOSIONS];
     int explosion_count;
@@ -102,6 +119,10 @@ struct movement_context {
     int lose_game;
     int win_game;
     enum entity destination;
+    struct snake_body *active_snake;
+    struct snake_body *opponent_snake;
+    struct snake_statistics *active_stats;
+    struct snake_statistics *opponent_stats;
 };
 
 enum turn_status {
@@ -112,11 +133,7 @@ enum turn_status {
 
 // Provided Function Prototypes
 void initialise_board(struct tile board[ROWS][COLS]);
-void print_board(
-    struct tile board[ROWS][COLS],
-    int snake_row,
-    int snake_col
-);
+void print_board(const struct game_state *state);
 void print_game_statistics(
     int points,
     int moves_made,
@@ -151,6 +168,13 @@ int handle_passage_command(struct game_state *state);
 int handle_portal_command(struct game_state *state);
 int handle_long_wall_command(struct game_state *state);
 void discard_line(void);
+int spawn_snake(
+    struct game_state *state,
+    struct snake_body *snake,
+    struct snake_statistics *stats,
+    const char *header,
+    const char *prompt
+);
 int run_spawning_phase(struct game_state *state);
 void save_initial_state(
     const struct game_state *state,
@@ -168,16 +192,18 @@ int process_reset_command(
 int process_statistics_command(const struct game_state *state, char command);
 int process_movement_command(
     struct game_state *state,
+    enum snake_id snake_id,
     char command,
     enum turn_status *status
 );
 int initialise_movement_context(
-    const struct game_state *state,
+    struct game_state *state,
+    enum snake_id snake_id,
     char command,
     struct movement_context *movement
 );
 void apply_portal_if_needed(
-    const struct game_state *state,
+    struct game_state *state,
     struct movement_context *movement
 );
 void evaluate_destination(
@@ -238,18 +264,17 @@ int apply_explosion_ring(
     int center_col,
     int distance
 );
-void destroy_entity_by_explosion(
+int destroy_entity_by_explosion(
     struct game_state *state,
     int row,
-    int col,
-    int *head_destroyed
+    int col
 );
 void deactivate_portal_pair(struct game_state *state, int row, int col);
 void update_points_for_destroyed_apple(
     struct game_state *state,
     enum entity apple_entity
 );
-int remove_snake_segment(struct game_state *state, int row, int col);
+int remove_snake_segment(struct snake_body *snake, int row, int col);
 
 
 // Provided sample main() function (you will need to modify this)
@@ -262,14 +287,13 @@ int main(void) {
 
     printf("--- Map Setup ---\n");
     run_setup_phase(&state);
-    print_board(state.board, NO_SNAKE, NO_SNAKE);
+    print_board(&state);
 
     if (!run_spawning_phase(&state)) {
         return 0;
     }
 
     save_initial_state(&state, &initial_state);
-    print_board(state.board, state.snake.head_row, state.snake.head_col);
 
     printf("--- Gameplay Phase ---\n");
     run_gameplay_phase(&state, &initial_state);
@@ -283,15 +307,24 @@ void initialise_game_state(struct game_state *state) {
     state->snake.length = 0;
     state->snake.head_row = NO_SNAKE;
     state->snake.head_col = NO_SNAKE;
+    state->rival_snake.length = 0;
+    state->rival_snake.head_row = NO_SNAKE;
+    state->rival_snake.head_col = NO_SNAKE;
     state->portals.count = 0;
     for (int index = 0; index < MAX_PORTAL_PAIRS; index++) {
         state->portals.active[index] = 0;
     }
+    state->original_stats.points = 0;
+    state->original_stats.moves_made = 0;
+    state->original_stats.apples_eaten = 0;
+    state->rival_stats.points = 0;
+    state->rival_stats.moves_made = 0;
+    state->rival_stats.apples_eaten = 0;
+    state->has_rival = 0;
+    state->current_turn = SNAKE_ORIGINAL;
     state->apples_initial = 0;
     state->apples_remaining = 0;
-    state->apples_eaten = 0;
-    state->points = 0;
-    state->moves_made = 0;
+    state->apples_removed_total = 0;
     state->points_remaining_total = 0;
     state->explosion_count = 0;
     for (int index = 0; index < MAX_EXPLOSIONS; index++) {
@@ -307,6 +340,9 @@ void run_setup_phase(struct game_state *state) {
     char command;
     while (scanf(" %c", &command) == 1) {
         if (command == 's' || command == 'S') {
+            if (command == 'S') {
+                state->has_rival = 1;
+            }
             return;
         }
 
@@ -638,13 +674,19 @@ void discard_line(void) {
     }
 }
 
-int run_spawning_phase(struct game_state *state) {
-    printf("--- Spawning Snake ---\n");
+int spawn_snake(
+    struct game_state *state,
+    struct snake_body *snake,
+    struct snake_statistics *stats,
+    const char *header,
+    const char *prompt
+) {
+    printf("%s\n", header);
 
     while (1) {
         int row;
         int col;
-        printf("Enter the snake's starting position: ");
+        printf("%s", prompt);
         if (scanf("%d %d", &row, &col) != 2) {
             return 0;
         }
@@ -666,16 +708,50 @@ int run_spawning_phase(struct game_state *state) {
         }
 
         state->board[row][col].entity = BODY_SEGMENT;
-        state->snake.rows[0] = row;
-        state->snake.cols[0] = col;
-        state->snake.length = 1;
-        state->snake.head_row = row;
-        state->snake.head_col = col;
-        state->points = 0;
-        state->moves_made = 0;
-        state->apples_eaten = 0;
+        state->board[row][col].value = 0;
+        snake->rows[0] = row;
+        snake->cols[0] = col;
+        snake->length = 1;
+        snake->head_row = row;
+        snake->head_col = col;
+        stats->points = 0;
+        stats->moves_made = 0;
+        stats->apples_eaten = 0;
         return 1;
     }
+}
+
+int run_spawning_phase(struct game_state *state) {
+    if (!spawn_snake(
+            state,
+            &state->snake,
+            &state->original_stats,
+            "--- Spawning Snake ---",
+            "Enter the snake's starting position: "
+        )) {
+        return 0;
+    }
+
+    print_board(state);
+
+    if (!state->has_rival) {
+        state->current_turn = SNAKE_ORIGINAL;
+        return 1;
+    }
+
+    if (!spawn_snake(
+            state,
+            &state->rival_snake,
+            &state->rival_stats,
+            "--- Spawning Rival Snake ---",
+            "Enter the rival snake's starting position: "
+        )) {
+        return 0;
+    }
+
+    state->current_turn = SNAKE_ORIGINAL;
+    print_board(state);
+    return 1;
 }
 
 void save_initial_state(
@@ -683,9 +759,14 @@ void save_initial_state(
     struct game_state *initial_state
 ) {
     *initial_state = *state;
-    initial_state->points = 0;
-    initial_state->moves_made = 0;
-    initial_state->apples_eaten = 0;
+    initial_state->original_stats.points = 0;
+    initial_state->original_stats.moves_made = 0;
+    initial_state->original_stats.apples_eaten = 0;
+    initial_state->rival_stats.points = 0;
+    initial_state->rival_stats.moves_made = 0;
+    initial_state->rival_stats.apples_eaten = 0;
+    initial_state->apples_removed_total = 0;
+    initial_state->current_turn = SNAKE_ORIGINAL;
     initial_state->explosion_count = 0;
     for (int index = 0; index < MAX_EXPLOSIONS; index++) {
         initial_state->explosions[index].active = 0;
@@ -718,32 +799,81 @@ void run_gameplay_phase(
             continue;
         }
 
-        if (advance_explosions(state)) {
-            print_board(state->board, state->snake.head_row, state->snake.head_col);
+        enum snake_id active_id = state->current_turn;
+        int explosion_status = advance_explosions(state);
+        int active_mask =
+            active_id == SNAKE_ORIGINAL ? EXPLOSION_ORIGINAL : EXPLOSION_RIVAL;
+        int opponent_mask =
+            active_id == SNAKE_ORIGINAL ? EXPLOSION_RIVAL : EXPLOSION_ORIGINAL;
+        int opponent_destroyed =
+            state->has_rival && (explosion_status & opponent_mask);
+
+        if (explosion_status & active_mask) {
+            print_board(state);
             printf("--- Game Over ---\n");
             printf("Guessss I was the prey today.\n");
+            if (state->has_rival) {
+                if (active_id == SNAKE_ORIGINAL) {
+                    printf("Rival snake wins!\n");
+                } else {
+                    printf("Original snake wins!\n");
+                }
+            }
             print_current_statistics(state);
             return;
         }
 
         enum turn_status status = TURN_CONTINUE;
-        if (!process_movement_command(state, command, &status)) {
+        if (!process_movement_command(state, active_id, command, &status)) {
             continue;
         }
 
-        print_board(state->board, state->snake.head_row, state->snake.head_col);
+        print_board(state);
 
         if (status == TURN_LOSE) {
             printf("--- Game Over ---\n");
             printf("Guessss I was the prey today.\n");
+            if (state->has_rival) {
+                if (active_id == SNAKE_ORIGINAL) {
+                    printf("Rival snake wins!\n");
+                } else {
+                    printf("Original snake wins!\n");
+                }
+            }
             print_current_statistics(state);
             return;
         }
         if (status == TURN_WIN) {
             printf("--- Game Over ---\n");
             printf("Ssslithered out with a full stomach!\n");
+            if (state->has_rival) {
+                if (active_id == SNAKE_ORIGINAL) {
+                    printf("Original snake wins!\n");
+                } else {
+                    printf("Rival snake wins!\n");
+                }
+            }
             print_current_statistics(state);
             return;
+        }
+
+        if (opponent_destroyed) {
+            printf("--- Game Over ---\n");
+            printf("Guessss I was the prey today.\n");
+            if (state->has_rival) {
+                if (active_id == SNAKE_ORIGINAL) {
+                    printf("Original snake wins!\n");
+                } else {
+                    printf("Rival snake wins!\n");
+                }
+            }
+            print_current_statistics(state);
+            return;
+        }
+
+        if (state->has_rival) {
+            state->current_turn =
+                state->current_turn == SNAKE_ORIGINAL ? SNAKE_RIVAL : SNAKE_ORIGINAL;
         }
     }
 }
@@ -759,7 +889,7 @@ int process_reset_command(
 
     printf("--- Resetting Map ---\n");
     *state = *initial_state;
-    print_board(state->board, state->snake.head_row, state->snake.head_col);
+    print_board(state);
     return 1;
 }
 
@@ -774,15 +904,16 @@ int process_statistics_command(const struct game_state *state, char command) {
 
 int process_movement_command(
     struct game_state *state,
+    enum snake_id snake_id,
     char command,
     enum turn_status *status
 ) {
     struct movement_context movement;
-    if (!initialise_movement_context(state, command, &movement)) {
+    if (!initialise_movement_context(state, snake_id, command, &movement)) {
         return 0;
     }
 
-    state->moves_made++;
+    movement.active_stats->moves_made++;
     apply_portal_if_needed(state, &movement);
     evaluate_destination(state, &movement);
     finalize_movement(state, &movement);
@@ -803,7 +934,8 @@ int process_movement_command(
 }
 
 int initialise_movement_context(
-    const struct game_state *state,
+    struct game_state *state,
+    enum snake_id snake_id,
     char command,
     struct movement_context *movement
 ) {
@@ -821,8 +953,23 @@ int initialise_movement_context(
         return 0;
     }
 
-    movement->attempted_row = state->snake.head_row + movement->delta_row;
-    movement->attempted_col = state->snake.head_col + movement->delta_col;
+    movement->active_snake =
+        snake_id == SNAKE_ORIGINAL ? &state->snake : &state->rival_snake;
+    movement->opponent_snake = NULL;
+    movement->active_stats =
+        snake_id == SNAKE_ORIGINAL ? &state->original_stats : &state->rival_stats;
+    movement->opponent_stats = NULL;
+    if (state->has_rival) {
+        movement->opponent_snake =
+            snake_id == SNAKE_ORIGINAL ? &state->rival_snake : &state->snake;
+        movement->opponent_stats =
+            snake_id == SNAKE_ORIGINAL ? &state->rival_stats : &state->original_stats;
+    }
+
+    movement->attempted_row =
+        movement->active_snake->head_row + movement->delta_row;
+    movement->attempted_col =
+        movement->active_snake->head_col + movement->delta_col;
     movement->new_row = movement->attempted_row;
     movement->new_col = movement->attempted_col;
     movement->should_add_segment = 0;
@@ -847,7 +994,7 @@ int initialise_movement_context(
 }
 
 void apply_portal_if_needed(
-    const struct game_state *state,
+    struct game_state *state,
     struct movement_context *movement
 ) {
     if (movement->lose_game || movement->destination != PORTAL) {
@@ -973,31 +1120,43 @@ void handle_consumable_tile(
         &state->board[movement->new_row][movement->new_col];
     int explosion_radius = consumed_tile->value;
 
+    if (
+        movement->destination == APPLE_NORMAL ||
+        movement->destination == APPLE_REVERSE ||
+        movement->destination == APPLE_SPLIT ||
+        movement->destination == APPLE_EXPLODE
+    ) {
+        if (state->apples_remaining > 0) {
+            state->apples_remaining--;
+        }
+        state->apples_removed_total++;
+    }
+
     if (movement->destination == APPLE_NORMAL) {
-        state->apples_eaten++;
-        state->apples_remaining--;
-        state->points += 5;
+        movement->active_stats->apples_eaten++;
+        movement->active_stats->points += 5;
         state->points_remaining_total -= 5;
     } else if (movement->destination == APPLE_REVERSE) {
-        state->apples_eaten++;
-        state->apples_remaining--;
-        state->points += 10;
+        movement->active_stats->apples_eaten++;
+        movement->active_stats->points += 10;
         state->points_remaining_total -= 10;
         movement->consumed_reverse = 1;
     } else if (movement->destination == APPLE_SPLIT) {
-        state->apples_eaten++;
-        state->apples_remaining--;
-        state->points += 20;
+        movement->active_stats->apples_eaten++;
+        movement->active_stats->points += 20;
         state->points_remaining_total -= 20;
         movement->consumed_split = 1;
     } else if (movement->destination == APPLE_EXPLODE) {
-        state->apples_eaten++;
-        state->apples_remaining--;
-        state->points += 20;
+        movement->active_stats->apples_eaten++;
+        movement->active_stats->points += 20;
         state->points_remaining_total -= 20;
         consumed_tile->value = 0;
-        start_explosion(state, movement->new_row, movement->new_col,
-            explosion_radius);
+        start_explosion(
+            state,
+            movement->new_row,
+            movement->new_col,
+            explosion_radius
+        );
     }
 
     if (state->points_remaining_total < 0) {
@@ -1012,26 +1171,27 @@ void finalize_movement(
     struct game_state *state,
     struct movement_context *movement
 ) {
+    struct snake_body *snake = movement->active_snake;
+    if (snake == NULL) {
+        return;
+    }
+
     if (movement->should_add_segment) {
-        int length = state->snake.length;
-        state->snake.rows[length] = movement->new_row;
-        state->snake.cols[length] = movement->new_col;
-        state->snake.length++;
-        state->snake.head_row = movement->new_row;
-        state->snake.head_col = movement->new_col;
+        int length = snake->length;
+        snake->rows[length] = movement->new_row;
+        snake->cols[length] = movement->new_col;
+        snake->length++;
+        snake->head_row = movement->new_row;
+        snake->head_col = movement->new_col;
 
         if (movement->consumed_reverse) {
-            reverse_snake(
-                state->snake.rows,
-                state->snake.cols,
-                state->snake.length
-            );
-            state->snake.head_row = state->snake.rows[state->snake.length - 1];
-            state->snake.head_col = state->snake.cols[state->snake.length - 1];
+            reverse_snake(snake->rows, snake->cols, snake->length);
+            snake->head_row = snake->rows[snake->length - 1];
+            snake->head_col = snake->cols[snake->length - 1];
         }
 
         if (movement->consumed_split) {
-            int body_segments = state->snake.length - 1;
+            int body_segments = snake->length - 1;
             int segments_to_remove = 0;
             if (body_segments > 0) {
                 if (body_segments % 2 == 0) {
@@ -1043,19 +1203,19 @@ void finalize_movement(
             if (segments_to_remove > 0) {
                 remove_tail_segments(
                     state->board,
-                    state->snake.rows,
-                    state->snake.cols,
-                    &state->snake.length,
+                    snake->rows,
+                    snake->cols,
+                    &snake->length,
                     segments_to_remove
                 );
             }
-            state->snake.head_row = state->snake.rows[state->snake.length - 1];
-            state->snake.head_col = state->snake.cols[state->snake.length - 1];
+            snake->head_row = snake->rows[snake->length - 1];
+            snake->head_col = snake->cols[snake->length - 1];
         }
     } else if (movement->win_game || movement->lose_game) {
         if (is_position_in_bounds(movement->new_row, movement->new_col)) {
-            state->snake.head_row = movement->new_row;
-            state->snake.head_col = movement->new_col;
+            snake->head_row = movement->new_row;
+            snake->head_col = movement->new_col;
         }
     }
 }
@@ -1116,18 +1276,32 @@ void unlock_exits_if_needed(struct game_state *state) {
 void print_current_statistics(const struct game_state *state) {
     double completion_percentage = 100.0;
     if (state->apples_initial != 0) {
-        completion_percentage = 100.0 * state->apples_eaten /
+        completion_percentage = 100.0 * state->apples_removed_total /
             (double)state->apples_initial;
     }
 
-    print_game_statistics(
-        state->points,
-        state->moves_made,
-        state->apples_eaten,
-        state->apples_remaining,
-        completion_percentage,
-        state->points_remaining_total
-    );
+    if (state->has_rival) {
+        print_game_statistics_with_rival(
+            state->original_stats.points,
+            state->original_stats.moves_made,
+            state->original_stats.apples_eaten,
+            state->rival_stats.points,
+            state->rival_stats.moves_made,
+            state->rival_stats.apples_eaten,
+            state->apples_remaining,
+            completion_percentage,
+            state->points_remaining_total
+        );
+    } else {
+        print_game_statistics(
+            state->original_stats.points,
+            state->original_stats.moves_made,
+            state->original_stats.apples_eaten,
+            state->apples_remaining,
+            completion_percentage,
+            state->points_remaining_total
+        );
+    }
 }
 
 void reverse_snake(
@@ -1202,10 +1376,10 @@ int is_movement_command(char command) {
     return command == 'w' || command == 'a' || command == 's' || command == 'd';
 }
 
-int remove_snake_segment(struct game_state *state, int row, int col) {
-    struct snake_body *snake = &state->snake;
+int remove_snake_segment(struct snake_body *snake, int row, int col) {
     for (int index = 0; index < snake->length; index++) {
         if (snake->rows[index] == row && snake->cols[index] == col) {
+            int was_head = index == snake->length - 1;
             for (int shift = index; shift < snake->length - 1; shift++) {
                 snake->rows[shift] = snake->rows[shift + 1];
                 snake->cols[shift] = snake->cols[shift + 1];
@@ -1218,11 +1392,11 @@ int remove_snake_segment(struct game_state *state, int row, int col) {
                 snake->head_row = NO_SNAKE;
                 snake->head_col = NO_SNAKE;
             }
-            return index == snake->length;
+            return was_head ? 1 : 0;
         }
     }
 
-    return 0;
+    return -1;
 }
 
 void update_points_for_destroyed_apple(
@@ -1232,7 +1406,7 @@ void update_points_for_destroyed_apple(
     if (state->apples_remaining > 0) {
         state->apples_remaining--;
     }
-    state->apples_eaten++;
+    state->apples_removed_total++;
 
     int apple_points = 0;
     if (apple_entity == APPLE_NORMAL) {
@@ -1269,26 +1443,30 @@ void deactivate_portal_pair(struct game_state *state, int row, int col) {
     }
 }
 
-void destroy_entity_by_explosion(
+int destroy_entity_by_explosion(
     struct game_state *state,
     int row,
-    int col,
-    int *head_destroyed
+    int col
 ) {
     struct tile *tile = &state->board[row][col];
     enum entity entity = tile->entity;
 
     if (entity == EXIT_LOCKED || entity == EXIT_UNLOCKED) {
-        return;
+        return EXPLOSION_NONE;
     }
+    int explosion_result = EXPLOSION_NONE;
     if (entity == PORTAL) {
         deactivate_portal_pair(state, row, col);
     } else if (entity == BODY_SEGMENT) {
-        int removed_head = remove_snake_segment(state, row, col);
-        if (removed_head) {
-            state->snake.head_row = NO_SNAKE;
-            state->snake.head_col = NO_SNAKE;
-            *head_destroyed = 1;
+        int removal = remove_snake_segment(&state->snake, row, col);
+        if (removal == 1) {
+            explosion_result |= EXPLOSION_ORIGINAL;
+        }
+        if (removal == -1 && state->has_rival) {
+            removal = remove_snake_segment(&state->rival_snake, row, col);
+            if (removal == 1) {
+                explosion_result |= EXPLOSION_RIVAL;
+            }
         }
     } else if (
         entity == APPLE_NORMAL ||
@@ -1301,6 +1479,7 @@ void destroy_entity_by_explosion(
 
     tile->entity = EXPLOSION;
     tile->value = 0;
+    return explosion_result;
 }
 
 void clear_explosion_ring(
@@ -1342,7 +1521,7 @@ int apply_explosion_ring(
         return 0;
     }
 
-    int head_destroyed = 0;
+    int explosion_status = EXPLOSION_NONE;
     for (int delta_row = -distance; delta_row <= distance; delta_row++) {
         int row = center_row + delta_row;
         int remaining = distance - (delta_row >= 0 ? delta_row : -delta_row);
@@ -1357,14 +1536,14 @@ int apply_explosion_ring(
             if (entity == EXIT_LOCKED || entity == EXIT_UNLOCKED) {
                 continue;
             }
-            destroy_entity_by_explosion(state, row, col, &head_destroyed);
+            explosion_status |= destroy_entity_by_explosion(state, row, col);
         }
     }
 
     if (state->apples_remaining == 0) {
         unlock_exits_if_needed(state);
     }
-    return head_destroyed;
+    return explosion_status;
 }
 
 void start_explosion(struct game_state *state, int row, int col, int radius) {
@@ -1404,7 +1583,7 @@ int advance_explosions(struct game_state *state) {
         );
     }
 
-    int head_destroyed = 0;
+    int explosion_status = EXPLOSION_NONE;
     int active_total = 0;
     for (int index = 0; index < MAX_EXPLOSIONS; index++) {
         if (!state->explosions[index].active) {
@@ -1416,14 +1595,17 @@ int advance_explosions(struct game_state *state) {
             continue;
         }
         boom->current_step++;
-        if (apply_explosion_ring(state, boom->row, boom->col, boom->current_step)) {
-            head_destroyed = 1;
-        }
+        explosion_status |= apply_explosion_ring(
+            state,
+            boom->row,
+            boom->col,
+            boom->current_step
+        );
         active_total++;
     }
 
     state->explosion_count = active_total;
-    return head_destroyed;
+    return explosion_status;
 }
 
 
@@ -1442,11 +1624,7 @@ void initialise_board(struct tile board[ROWS][COLS]) {
 }
 
 // Prints the game board, showing the snake's head position on the board.
-void print_board(
-    struct tile board[ROWS][COLS],
-    int snake_row,
-    int snake_col
-) {
+void print_board(const struct game_state *state) {
     print_board_line();
     print_board_header();
     print_board_line();
@@ -1454,9 +1632,20 @@ void print_board(
         print_tile_spacer();
         for (int col = 0; col < COLS; col++) {
             printf(" ");
-            struct tile tile = board[row][col];
-            if (row == snake_row && col == snake_col) {
+            struct tile tile = state->board[row][col];
+            int is_original_head =
+                state->snake.length > 0 &&
+                row == state->snake.head_row &&
+                col == state->snake.head_col;
+            int is_rival_head =
+                state->has_rival &&
+                state->rival_snake.length > 0 &&
+                row == state->rival_snake.head_row &&
+                col == state->rival_snake.head_col;
+            if (is_original_head) {
                 printf("^~^");
+            } else if (is_rival_head) {
+                printf("^v^");
             } else if (tile.entity == WALL) {
                 printf("|||");
             } else if (tile.entity == BODY_SEGMENT) {
