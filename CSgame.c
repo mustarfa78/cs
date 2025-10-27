@@ -98,7 +98,7 @@ int main(void) {
 
     char command;
     while (scanf(" %c", &command) == 1) {
-        if (command == 's') {
+        if (command == 's' || command == 'S') {
             break;
         }
 
@@ -237,7 +237,7 @@ int main(void) {
 
     print_board(board, NO_SNAKE, NO_SNAKE);
 
-    printf("\n--- Spawning Snake ---\n");
+    printf("--- Spawning Snake ---\n");
 
     int snake_row;
     int snake_col;
