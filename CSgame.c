@@ -50,6 +50,52 @@ struct tile {
 };
 
 // Add your own structs below this line
+struct portal_pairs {
+    int rows[MAX_PORTAL_PAIRS][2];
+    int cols[MAX_PORTAL_PAIRS][2];
+    int count;
+};
+
+struct snake_body {
+    int rows[MAX_SNAKE_LENGTH];
+    int cols[MAX_SNAKE_LENGTH];
+    int length;
+    int head_row;
+    int head_col;
+};
+
+struct game_state {
+    struct tile board[ROWS][COLS];
+    struct snake_body snake;
+    struct portal_pairs portals;
+    int apples_initial;
+    int apples_remaining;
+    int apples_eaten;
+    int points;
+    int moves_made;
+    int points_remaining_total;
+};
+
+struct movement_context {
+    int delta_row;
+    int delta_col;
+    int attempted_row;
+    int attempted_col;
+    int new_row;
+    int new_col;
+    int should_add_segment;
+    int consumed_reverse;
+    int consumed_split;
+    int lose_game;
+    int win_game;
+    enum entity destination;
+};
+
+enum turn_status {
+    TURN_CONTINUE,
+    TURN_WIN,
+    TURN_LOSE
+};
 
 // Provided Function Prototypes
 void initialise_board(struct tile board[ROWS][COLS]);
@@ -82,23 +128,74 @@ void print_tile_spacer(void);
 void print_board_header(void);
 
 // Add your function prototypes below this line
+void initialise_game_state(struct game_state *state);
+void run_setup_phase(struct game_state *state);
+int process_setup_command(struct game_state *state, char command);
+int handle_wall_command(struct game_state *state);
+int handle_exit_command(struct game_state *state);
+int handle_apple_command(struct game_state *state);
+int handle_passage_command(struct game_state *state);
+int handle_portal_command(struct game_state *state);
+int handle_long_wall_command(struct game_state *state);
+void discard_line(void);
+int run_spawning_phase(struct game_state *state);
+void save_initial_state(
+    const struct game_state *state,
+    struct game_state *initial_state
+);
+void run_gameplay_phase(
+    struct game_state *state,
+    const struct game_state *initial_state
+);
+int process_reset_command(
+    struct game_state *state,
+    const struct game_state *initial_state,
+    char command
+);
+int process_statistics_command(const struct game_state *state, char command);
+int process_movement_command(
+    struct game_state *state,
+    char command,
+    enum turn_status *status
+);
+int initialise_movement_context(
+    const struct game_state *state,
+    char command,
+    struct movement_context *movement
+);
+void apply_portal_if_needed(
+    const struct game_state *state,
+    struct movement_context *movement
+);
+void evaluate_destination(
+    struct game_state *state,
+    struct movement_context *movement
+);
+void handle_passage_tile(
+    struct game_state *state,
+    struct movement_context *movement
+);
+void handle_consumable_tile(
+    struct game_state *state,
+    struct movement_context *movement
+);
+void finalize_movement(
+    struct game_state *state,
+    struct movement_context *movement
+);
 int is_position_in_bounds(int row, int col);
 int is_tile_empty(struct tile board[ROWS][COLS], int row, int col);
 int can_place_long_wall(
     struct tile board[ROWS][COLS], int start_row, int start_col,
     char direction, int length
 );
-void unlock_exits_if_needed(struct tile board[ROWS][COLS], int apples_remaining);
-void print_current_statistics(
-    int points,
-    int moves_made,
-    int apples_eaten,
-    int apples_remaining,
-    int apples_initial,
-    int points_remaining_total
+void unlock_exits_if_needed(struct game_state *state);
+void print_current_statistics(const struct game_state *state);
+void reverse_snake(
+    int snake_rows[MAX_SNAKE_LENGTH],
+    int snake_cols[MAX_SNAKE_LENGTH],
+    int snake_length
 );
-void reverse_snake(int snake_rows[MAX_SNAKE_LENGTH], int snake_cols[MAX_SNAKE_LENGTH],
-    int snake_length);
 void remove_tail_segments(
     struct tile board[ROWS][COLS],
     int snake_rows[MAX_SNAKE_LENGTH],
@@ -106,14 +203,8 @@ void remove_tail_segments(
     int *snake_length,
     int segments_to_remove
 );
-void copy_board(
-    struct tile source[ROWS][COLS],
-    struct tile destination[ROWS][COLS]
-);
 int find_portal_partner(
-    int portal_pair_rows[][2],
-    int portal_pair_cols[][2],
-    int portal_pair_count,
+    const struct portal_pairs *portals,
     int row,
     int col,
     int *partner_row,
@@ -125,584 +216,745 @@ int find_portal_partner(
 int main(void) {
     printf("Welcome to CS Snake!\n\n");
 
-    struct tile board[ROWS][COLS];
-    initialise_board(board);
-    struct tile initial_board[ROWS][COLS];
-
-    int initial_snake_rows[MAX_SNAKE_LENGTH];
-    int initial_snake_cols[MAX_SNAKE_LENGTH];
-    int initial_snake_length = 0;
-    int initial_snake_head_row = NO_SNAKE;
-    int initial_snake_head_col = NO_SNAKE;
-    int initial_apples_remaining = 0;
-    int initial_points_remaining_total = 0;
-    int initial_apples_eaten = 0;
+    struct game_state state;
+    struct game_state initial_state;
+    initialise_game_state(&state);
 
     printf("--- Map Setup ---\n");
+    run_setup_phase(&state);
+    print_board(state.board, NO_SNAKE, NO_SNAKE);
 
-    char command;
-    int apples_initial = 0;
-    int apples_remaining = 0;
-    int points_remaining_total = 0;
-    int snake_rows[MAX_SNAKE_LENGTH];
-    int snake_cols[MAX_SNAKE_LENGTH];
-    int snake_length = 0;
-    int portal_pair_rows[MAX_PORTAL_PAIRS][2];
-    int portal_pair_cols[MAX_PORTAL_PAIRS][2];
-    int portal_pair_count = 0;
-    while (scanf(" %c", &command) == 1) {
-        if (command == 's' || command == 'S') {
-            break;
-        }
-
-        if (command == 'w') {
-            int row;
-            int col;
-            if (scanf("%d %d", &row, &col) != 2) {
-                continue;
-            }
-            if (!is_position_in_bounds(row, col)) {
-                printf(
-                    "ERROR: Invalid position, %d %d is out of bounds!\n",
-                    row,
-                    col
-                );
-                continue;
-            }
-            if (!is_tile_empty(board, row, col)) {
-                printf(
-                    "ERROR: Invalid tile, %d %d is occupied!\n",
-                    row,
-                    col
-                );
-                continue;
-            }
-            board[row][col].entity = WALL;
-            continue;
-        }
-
-        if (command == 'e') {
-            int row;
-            int col;
-            if (scanf("%d %d", &row, &col) != 2) {
-                continue;
-            }
-            if (!is_position_in_bounds(row, col)) {
-                printf(
-                    "ERROR: Invalid position, %d %d is out of bounds!\n",
-                    row,
-                    col
-                );
-                continue;
-            }
-            if (!is_tile_empty(board, row, col)) {
-                printf(
-                    "ERROR: Invalid tile, %d %d is occupied!\n",
-                    row,
-                    col
-                );
-                continue;
-            }
-            board[row][col].entity = EXIT_LOCKED;
-            continue;
-        }
-
-        if (command == 'a') {
-            char apple_type;
-            int row;
-            int col;
-            if (scanf(" %c %d %d", &apple_type, &row, &col) != 3) {
-                continue;
-            }
-            enum entity apple_entity;
-            int apple_points = 0;
-            if (apple_type == 'n') {
-                apple_entity = APPLE_NORMAL;
-                apple_points = 5;
-            } else if (apple_type == 'r') {
-                apple_entity = APPLE_REVERSE;
-                apple_points = 10;
-            } else if (apple_type == 's') {
-                apple_entity = APPLE_SPLIT;
-                apple_points = 20;
-            } else {
-                continue;
-            }
-            if (!is_position_in_bounds(row, col)) {
-                printf(
-                    "ERROR: Invalid position, %d %d is out of bounds!\n",
-                    row,
-                    col
-                );
-                continue;
-            }
-            if (!is_tile_empty(board, row, col)) {
-                printf(
-                    "ERROR: Invalid tile, %d %d is occupied!\n",
-                    row,
-                    col
-                );
-                continue;
-            }
-            board[row][col].entity = apple_entity;
-            apples_initial++;
-            apples_remaining++;
-            points_remaining_total += apple_points;
-            continue;
-        }
-
-        if (command == 'p') {
-            char passage_direction;
-            int row;
-            int col;
-            if (scanf(" %c %d %d", &passage_direction, &row, &col) != 3) {
-                continue;
-            }
-            if (!is_position_in_bounds(row, col)) {
-                printf(
-                    "ERROR: Invalid position, %d %d is out of bounds!\n",
-                    row,
-                    col
-                );
-                continue;
-            }
-            if (!is_tile_empty(board, row, col)) {
-                printf(
-                    "ERROR: Invalid tile, %d %d is occupied!\n",
-                    row,
-                    col
-                );
-                continue;
-            }
-
-            enum entity passage_entity = EMPTY;
-            if (passage_direction == '^') {
-                passage_entity = PASSAGE_UP;
-            } else if (passage_direction == 'v') {
-                passage_entity = PASSAGE_DOWN;
-            } else if (passage_direction == '<') {
-                passage_entity = PASSAGE_LEFT;
-            } else if (passage_direction == '>') {
-                passage_entity = PASSAGE_RIGHT;
-            } else {
-                continue;
-            }
-
-            board[row][col].entity = passage_entity;
-            continue;
-        }
-
-        if (command == 't') {
-            int row1;
-            int col1;
-            int row2;
-            int col2;
-            if (scanf("%d %d %d %d", &row1, &col1, &row2, &col2) != 4) {
-                continue;
-            }
-            if (portal_pair_count >= MAX_PORTAL_PAIRS) {
-                printf(
-                    "ERROR: Invalid placement, maximum number of portal pairs already reached!\n"
-                );
-                continue;
-            }
-            if (!is_position_in_bounds(row1, col1)) {
-                printf(
-                    "ERROR: Invalid position for first portal in pair, %d %d is out of bounds!\n",
-                    row1,
-                    col1
-                );
-                continue;
-            }
-            if (!is_tile_empty(board, row1, col1)) {
-                printf(
-                    "ERROR: Invalid tile for first portal in pair, %d %d is occupied!\n",
-                    row1,
-                    col1
-                );
-                continue;
-            }
-            if (!is_position_in_bounds(row2, col2)) {
-                printf(
-                    "ERROR: Invalid position for second portal in pair, %d %d is out of bounds!\n",
-                    row2,
-                    col2
-                );
-                continue;
-            }
-            if ((row1 != row2 || col1 != col2) && !is_tile_empty(board, row2, col2)) {
-                printf(
-                    "ERROR: Invalid tile for second portal in pair, %d %d is occupied!\n",
-                    row2,
-                    col2
-                );
-                continue;
-            }
-
-            board[row1][col1].entity = PORTAL;
-            board[row2][col2].entity = PORTAL;
-            portal_pair_rows[portal_pair_count][0] = row1;
-            portal_pair_cols[portal_pair_count][0] = col1;
-            portal_pair_rows[portal_pair_count][1] = row2;
-            portal_pair_cols[portal_pair_count][1] = col2;
-            portal_pair_count++;
-            continue;
-        }
-
-        if (command == 'W') {
-            char direction;
-            int row;
-            int col;
-            int length;
-            if (scanf(" %c %d %d %d", &direction, &row, &col, &length) != 4) {
-                continue;
-            }
-            if (!is_position_in_bounds(row, col)) {
-                printf(
-                    "ERROR: Invalid position, %d %d is out of bounds!\n",
-                    row,
-                    col
-                );
-                continue;
-            }
-            int placement_check = can_place_long_wall(board, row, col, direction, length);
-            if (placement_check == 1) {
-                printf(
-                    "ERROR: Invalid position, part of the wall is out of bounds!\n"
-                );
-                continue;
-            }
-            if (placement_check == 2) {
-                printf(
-                    "ERROR: Invalid tile, part of the wall is occupied!\n"
-                );
-                continue;
-            }
-
-            int row_delta = 0;
-            int col_delta = 0;
-            if (direction == 'h') {
-                col_delta = 1;
-            } else if (direction == 'v') {
-                row_delta = 1;
-            }
-            for (int index = 0; index < length; index++) {
-                int target_row = row + row_delta * index;
-                int target_col = col + col_delta * index;
-                board[target_row][target_col].entity = WALL;
-            }
-            continue;
-        }
-
-        int ch = getchar();
-        while (ch != '\n' && ch != EOF) {
-            ch = getchar();
-        }
+    if (!run_spawning_phase(&state)) {
+        return 0;
     }
 
-    print_board(board, NO_SNAKE, NO_SNAKE);
-
-    printf("--- Spawning Snake ---\n");
-
-    int snake_row;
-    int snake_col;
-    while (1) {
-        printf("Enter the snake's starting position: ");
-        if (scanf("%d %d", &snake_row, &snake_col) != 2) {
-            return 0;
-        }
-        if (!is_position_in_bounds(snake_row, snake_col)) {
-            printf(
-                "ERROR: Invalid position, %d %d is out of bounds!\n",
-                snake_row,
-                snake_col
-            );
-            continue;
-        }
-        if (!is_tile_empty(board, snake_row, snake_col)) {
-            printf(
-                "ERROR: Invalid tile, %d %d is occupied!\n",
-                snake_row,
-                snake_col
-            );
-            continue;
-        }
-        break;
-    }
-
-    board[snake_row][snake_col].entity = BODY_SEGMENT;
-    int snake_head_row = snake_row;
-    int snake_head_col = snake_col;
-    snake_rows[0] = snake_row;
-    snake_cols[0] = snake_col;
-    snake_length = 1;
-    int moves_made = 0;
-    int apples_eaten = 0;
-    int points = 0;
-
-    copy_board(board, initial_board);
-    initial_snake_length = snake_length;
-    initial_snake_head_row = snake_head_row;
-    initial_snake_head_col = snake_head_col;
-    for (int index = 0; index < snake_length; index++) {
-        initial_snake_rows[index] = snake_rows[index];
-        initial_snake_cols[index] = snake_cols[index];
-    }
-    initial_apples_remaining = apples_remaining;
-    initial_points_remaining_total = points_remaining_total;
-    initial_apples_eaten = apples_eaten;
-
-    print_board(board, snake_head_row, snake_head_col);
+    save_initial_state(&state, &initial_state);
+    print_board(state.board, state.snake.head_row, state.snake.head_col);
 
     printf("--- Gameplay Phase ---\n");
+    run_gameplay_phase(&state, &initial_state);
+
+    return 0;
+}
+
+// Add your function definitions below this line
+void initialise_game_state(struct game_state *state) {
+    initialise_board(state->board);
+    state->snake.length = 0;
+    state->snake.head_row = NO_SNAKE;
+    state->snake.head_col = NO_SNAKE;
+    state->portals.count = 0;
+    state->apples_initial = 0;
+    state->apples_remaining = 0;
+    state->apples_eaten = 0;
+    state->points = 0;
+    state->moves_made = 0;
+    state->points_remaining_total = 0;
+}
+
+void run_setup_phase(struct game_state *state) {
+    char command;
+    while (scanf(" %c", &command) == 1) {
+        if (command == 's' || command == 'S') {
+            return;
+        }
+
+        if (process_setup_command(state, command)) {
+            continue;
+        }
+
+        discard_line();
+    }
+}
+
+int process_setup_command(struct game_state *state, char command) {
+    if (command == 'w') {
+        return handle_wall_command(state);
+    }
+    if (command == 'e') {
+        return handle_exit_command(state);
+    }
+    if (command == 'a') {
+        return handle_apple_command(state);
+    }
+    if (command == 'p') {
+        return handle_passage_command(state);
+    }
+    if (command == 't') {
+        return handle_portal_command(state);
+    }
+    if (command == 'W') {
+        return handle_long_wall_command(state);
+    }
+
+    return 0;
+}
+
+int handle_wall_command(struct game_state *state) {
+    int row;
+    int col;
+    if (scanf("%d %d", &row, &col) != 2) {
+        discard_line();
+        return 1;
+    }
+
+    if (!is_position_in_bounds(row, col)) {
+        printf(
+            "ERROR: Invalid position, %d %d is out of bounds!\n",
+            row,
+            col
+        );
+        return 1;
+    }
+    if (!is_tile_empty(state->board, row, col)) {
+        printf(
+            "ERROR: Invalid tile, %d %d is occupied!\n",
+            row,
+            col
+        );
+        return 1;
+    }
+
+    state->board[row][col].entity = WALL;
+    return 1;
+}
+
+int handle_exit_command(struct game_state *state) {
+    int row;
+    int col;
+    if (scanf("%d %d", &row, &col) != 2) {
+        discard_line();
+        return 1;
+    }
+
+    if (!is_position_in_bounds(row, col)) {
+        printf(
+            "ERROR: Invalid position, %d %d is out of bounds!\n",
+            row,
+            col
+        );
+        return 1;
+    }
+    if (!is_tile_empty(state->board, row, col)) {
+        printf(
+            "ERROR: Invalid tile, %d %d is occupied!\n",
+            row,
+            col
+        );
+        return 1;
+    }
+
+    state->board[row][col].entity = EXIT_LOCKED;
+    return 1;
+}
+
+int handle_apple_command(struct game_state *state) {
+    char apple_type;
+    int row;
+    int col;
+    if (scanf(" %c %d %d", &apple_type, &row, &col) != 3) {
+        discard_line();
+        return 1;
+    }
+
+    enum entity apple_entity = EMPTY;
+    int apple_points = 0;
+    if (apple_type == 'n') {
+        apple_entity = APPLE_NORMAL;
+        apple_points = 5;
+    } else if (apple_type == 'r') {
+        apple_entity = APPLE_REVERSE;
+        apple_points = 10;
+    } else if (apple_type == 's') {
+        apple_entity = APPLE_SPLIT;
+        apple_points = 20;
+    } else {
+        return 1;
+    }
+
+    if (!is_position_in_bounds(row, col)) {
+        printf(
+            "ERROR: Invalid position, %d %d is out of bounds!\n",
+            row,
+            col
+        );
+        return 1;
+    }
+    if (!is_tile_empty(state->board, row, col)) {
+        printf(
+            "ERROR: Invalid tile, %d %d is occupied!\n",
+            row,
+            col
+        );
+        return 1;
+    }
+
+    state->board[row][col].entity = apple_entity;
+    state->apples_initial++;
+    state->apples_remaining++;
+    state->points_remaining_total += apple_points;
+    return 1;
+}
+
+int handle_passage_command(struct game_state *state) {
+    char passage_direction;
+    int row;
+    int col;
+    if (scanf(" %c %d %d", &passage_direction, &row, &col) != 3) {
+        discard_line();
+        return 1;
+    }
+
+    if (!is_position_in_bounds(row, col)) {
+        printf(
+            "ERROR: Invalid position, %d %d is out of bounds!\n",
+            row,
+            col
+        );
+        return 1;
+    }
+    if (!is_tile_empty(state->board, row, col)) {
+        printf(
+            "ERROR: Invalid tile, %d %d is occupied!\n",
+            row,
+            col
+        );
+        return 1;
+    }
+
+    enum entity passage_entity = EMPTY;
+    if (passage_direction == '^') {
+        passage_entity = PASSAGE_UP;
+    } else if (passage_direction == 'v') {
+        passage_entity = PASSAGE_DOWN;
+    } else if (passage_direction == '<') {
+        passage_entity = PASSAGE_LEFT;
+    } else if (passage_direction == '>') {
+        passage_entity = PASSAGE_RIGHT;
+    } else {
+        return 1;
+    }
+
+    state->board[row][col].entity = passage_entity;
+    return 1;
+}
+
+int handle_portal_command(struct game_state *state) {
+    int row1;
+    int col1;
+    int row2;
+    int col2;
+    if (scanf("%d %d %d %d", &row1, &col1, &row2, &col2) != 4) {
+        discard_line();
+        return 1;
+    }
+
+    if (state->portals.count >= MAX_PORTAL_PAIRS) {
+        printf(
+            "ERROR: Invalid placement, maximum number of portal pairs "
+            "already reached!\n"
+        );
+        return 1;
+    }
+    if (!is_position_in_bounds(row1, col1)) {
+        printf(
+            "ERROR: Invalid position for first portal in pair, %d %d "
+            "is out of bounds!\n",
+            row1,
+            col1
+        );
+        return 1;
+    }
+    if (!is_tile_empty(state->board, row1, col1)) {
+        printf(
+            "ERROR: Invalid tile for first portal in pair, %d %d is "
+            "occupied!\n",
+            row1,
+            col1
+        );
+        return 1;
+    }
+    if (!is_position_in_bounds(row2, col2)) {
+        printf(
+            "ERROR: Invalid position for second portal in pair, %d %d "
+            "is out of bounds!\n",
+            row2,
+            col2
+        );
+        return 1;
+    }
+    if (
+        (row1 != row2 || col1 != col2) &&
+        !is_tile_empty(state->board, row2, col2)
+    ) {
+        printf(
+            "ERROR: Invalid tile for second portal in pair, %d %d is "
+            "occupied!\n",
+            row2,
+            col2
+        );
+        return 1;
+    }
+
+    state->board[row1][col1].entity = PORTAL;
+    state->board[row2][col2].entity = PORTAL;
+    state->portals.rows[state->portals.count][0] = row1;
+    state->portals.cols[state->portals.count][0] = col1;
+    state->portals.rows[state->portals.count][1] = row2;
+    state->portals.cols[state->portals.count][1] = col2;
+    state->portals.count++;
+    return 1;
+}
+
+int handle_long_wall_command(struct game_state *state) {
+    char direction;
+    int row;
+    int col;
+    int length;
+    if (scanf(" %c %d %d %d", &direction, &row, &col, &length) != 4) {
+        discard_line();
+        return 1;
+    }
+
+    if (!is_position_in_bounds(row, col)) {
+        printf(
+            "ERROR: Invalid position, %d %d is out of bounds!\n",
+            row,
+            col
+        );
+        return 1;
+    }
+
+    int placement_check = can_place_long_wall(
+        state->board,
+        row,
+        col,
+        direction,
+        length
+    );
+    if (placement_check == 1) {
+        printf(
+            "ERROR: Invalid position, part of the wall is out of bounds!\n"
+        );
+        return 1;
+    }
+    if (placement_check == 2) {
+        printf(
+            "ERROR: Invalid tile, part of the wall is occupied!\n"
+        );
+        return 1;
+    }
+
+    int row_delta = 0;
+    int col_delta = 0;
+    if (direction == 'h') {
+        col_delta = 1;
+    } else if (direction == 'v') {
+        row_delta = 1;
+    }
+
+    for (int index = 0; index < length; index++) {
+        int target_row = row + row_delta * index;
+        int target_col = col + col_delta * index;
+        state->board[target_row][target_col].entity = WALL;
+    }
+
+    return 1;
+}
+
+void discard_line(void) {
+    int leftover_char = getchar();
+    while (leftover_char != '\n' && leftover_char != EOF) {
+        leftover_char = getchar();
+    }
+}
+
+int run_spawning_phase(struct game_state *state) {
+    printf("--- Spawning Snake ---\n");
 
     while (1) {
-        char gameplay_command;
-        int read_result = scanf(" %c", &gameplay_command);
-        if (read_result != 1) {
-            printf("--- Quitting Game ---\n");
+        int row;
+        int col;
+        printf("Enter the snake's starting position: ");
+        if (scanf("%d %d", &row, &col) != 2) {
             return 0;
         }
-
-        if (gameplay_command == 'r') {
-            printf("--- Resetting Map ---\n");
-            copy_board(initial_board, board);
-            for (int index = 0; index < initial_snake_length; index++) {
-                snake_rows[index] = initial_snake_rows[index];
-                snake_cols[index] = initial_snake_cols[index];
-            }
-            snake_length = initial_snake_length;
-            snake_head_row = initial_snake_head_row;
-            snake_head_col = initial_snake_head_col;
-            apples_remaining = initial_apples_remaining;
-            apples_eaten = initial_apples_eaten;
-            points_remaining_total = initial_points_remaining_total;
-            points = 0;
-            moves_made = 0;
-            print_board(board, snake_head_row, snake_head_col);
+        if (!is_position_in_bounds(row, col)) {
+            printf(
+                "ERROR: Invalid position, %d %d is out of bounds!\n",
+                row,
+                col
+            );
             continue;
         }
-
-        if (gameplay_command == 'p') {
-            print_current_statistics(
-                points,
-                moves_made,
-                apples_eaten,
-                apples_remaining,
-                apples_initial,
-                points_remaining_total
+        if (!is_tile_empty(state->board, row, col)) {
+            printf(
+                "ERROR: Invalid tile, %d %d is occupied!\n",
+                row,
+                col
             );
             continue;
         }
 
-        int delta_row = 0;
-        int delta_col = 0;
-        if (gameplay_command == 'w') {
-            delta_row = -1;
-        } else if (gameplay_command == 'a') {
-            delta_col = -1;
-        } else if (gameplay_command == 's') {
-            delta_row = 1;
-        } else if (gameplay_command == 'd') {
-            delta_col = 1;
-        } else {
+        state->board[row][col].entity = BODY_SEGMENT;
+        state->snake.rows[0] = row;
+        state->snake.cols[0] = col;
+        state->snake.length = 1;
+        state->snake.head_row = row;
+        state->snake.head_col = col;
+        state->points = 0;
+        state->moves_made = 0;
+        state->apples_eaten = 0;
+        return 1;
+    }
+}
+
+void save_initial_state(
+    const struct game_state *state,
+    struct game_state *initial_state
+) {
+    *initial_state = *state;
+    initial_state->points = 0;
+    initial_state->moves_made = 0;
+    initial_state->apples_eaten = 0;
+}
+
+void run_gameplay_phase(
+    struct game_state *state,
+    const struct game_state *initial_state
+) {
+    while (1) {
+        char command;
+        if (scanf(" %c", &command) != 1) {
+            printf("--- Quitting Game ---\n");
+            return;
+        }
+
+        if (process_reset_command(state, initial_state, command)) {
+            continue;
+        }
+        if (process_statistics_command(state, command)) {
             continue;
         }
 
-        moves_made++;
-
-        int attempted_row = snake_head_row + delta_row;
-        int attempted_col = snake_head_col + delta_col;
-        int new_row = attempted_row;
-        int new_col = attempted_col;
-
-        int lose_game = 0;
-        int win_game = 0;
-        int should_add_segment = 0;
-        int apple_value = 0;
-        int consumed_reverse = 0;
-        int consumed_split = 0;
-
-        if (!is_position_in_bounds(attempted_row, attempted_col)) {
-            lose_game = 1;
-        } else {
-            enum entity destination_entity = board[attempted_row][attempted_col].entity;
-
-            if (destination_entity == PORTAL) {
-                int partner_row = attempted_row;
-                int partner_col = attempted_col;
-                if (!find_portal_partner(
-                        portal_pair_rows,
-                        portal_pair_cols,
-                        portal_pair_count,
-                        attempted_row,
-                        attempted_col,
-                        &partner_row,
-                        &partner_col)) {
-                    partner_row = attempted_row;
-                    partner_col = attempted_col;
-                }
-                new_row = partner_row + delta_row;
-                new_col = partner_col + delta_col;
-                if (!is_position_in_bounds(new_row, new_col)) {
-                    lose_game = 1;
-                } else {
-                    destination_entity = board[new_row][new_col].entity;
-                }
-            } else {
-                new_row = attempted_row;
-                new_col = attempted_col;
-            }
-
-            if (!lose_game) {
-                if (destination_entity == WALL || destination_entity == BODY_SEGMENT) {
-                    lose_game = 1;
-                } else if (destination_entity == EXIT_LOCKED) {
-                    if (apples_remaining == 0) {
-                        board[new_row][new_col].entity = EXIT_UNLOCKED;
-                        win_game = 1;
-                    } else {
-                        lose_game = 1;
-                    }
-                } else if (destination_entity == EXIT_UNLOCKED) {
-                    win_game = 1;
-                } else if (
-                    destination_entity == PASSAGE_UP ||
-                    destination_entity == PASSAGE_DOWN ||
-                    destination_entity == PASSAGE_LEFT ||
-                    destination_entity == PASSAGE_RIGHT
-                ) {
-                    int correct_direction = 0;
-                    if (destination_entity == PASSAGE_UP && delta_row == -1) {
-                        correct_direction = 1;
-                    } else if (destination_entity == PASSAGE_DOWN && delta_row == 1) {
-                        correct_direction = 1;
-                    } else if (destination_entity == PASSAGE_LEFT && delta_col == -1) {
-                        correct_direction = 1;
-                    } else if (destination_entity == PASSAGE_RIGHT && delta_col == 1) {
-                        correct_direction = 1;
-                    }
-
-                    if (correct_direction) {
-                        should_add_segment = 1;
-                        board[new_row][new_col].entity = BODY_SEGMENT;
-                    } else {
-                        lose_game = 1;
-                    }
-                } else {
-                    should_add_segment = 1;
-
-                    if (destination_entity == APPLE_NORMAL) {
-                        apple_value = 5;
-                        apples_eaten++;
-                        apples_remaining--;
-                        points += apple_value;
-                        points_remaining_total -= apple_value;
-                    } else if (destination_entity == APPLE_REVERSE) {
-                        apple_value = 10;
-                        apples_eaten++;
-                        apples_remaining--;
-                        points += apple_value;
-                        points_remaining_total -= apple_value;
-                        consumed_reverse = 1;
-                    } else if (destination_entity == APPLE_SPLIT) {
-                        apple_value = 20;
-                        apples_eaten++;
-                        apples_remaining--;
-                        points += apple_value;
-                        points_remaining_total -= apple_value;
-                        consumed_split = 1;
-                    }
-
-                    if (points_remaining_total < 0) {
-                        points_remaining_total = 0;
-                    }
-
-                    board[new_row][new_col].entity = BODY_SEGMENT;
-                }
-            }
+        enum turn_status status = TURN_CONTINUE;
+        if (!process_movement_command(state, command, &status)) {
+            continue;
         }
 
-        if (should_add_segment) {
-            snake_rows[snake_length] = new_row;
-            snake_cols[snake_length] = new_col;
-            snake_length++;
+        print_board(state->board, state->snake.head_row, state->snake.head_col);
 
-            snake_head_row = new_row;
-            snake_head_col = new_col;
-
-            if (consumed_reverse) {
-                reverse_snake(snake_rows, snake_cols, snake_length);
-                snake_head_row = snake_rows[snake_length - 1];
-                snake_head_col = snake_cols[snake_length - 1];
-            }
-
-            if (consumed_split) {
-                int body_segments = snake_length - 1;
-                int segments_to_remove = 0;
-                if (body_segments > 0) {
-                    if (body_segments % 2 == 0) {
-                        segments_to_remove = body_segments / 2;
-                    } else {
-                        segments_to_remove = (body_segments + 1) / 2;
-                    }
-                }
-                if (segments_to_remove > 0) {
-                    remove_tail_segments(
-                        board,
-                        snake_rows,
-                        snake_cols,
-                        &snake_length,
-                        segments_to_remove
-                    );
-                }
-                snake_head_row = snake_rows[snake_length - 1];
-                snake_head_col = snake_cols[snake_length - 1];
-            }
-        } else if (win_game || lose_game) {
-            if (is_position_in_bounds(new_row, new_col)) {
-                snake_head_row = new_row;
-                snake_head_col = new_col;
-            }
-        }
-
-        if (apples_remaining == 0) {
-            unlock_exits_if_needed(board, apples_remaining);
-        }
-
-        print_board(board, snake_head_row, snake_head_col);
-
-        if (lose_game) {
+        if (status == TURN_LOSE) {
             printf("--- Game Over ---\n");
             printf("Guessss I was the prey today.\n");
-            print_current_statistics(
-                points,
-                moves_made,
-                apples_eaten,
-                apples_remaining,
-                apples_initial,
-                points_remaining_total
-            );
-            return 0;
+            print_current_statistics(state);
+            return;
         }
-
-        if (win_game) {
+        if (status == TURN_WIN) {
             printf("--- Game Over ---\n");
             printf("Ssslithered out with a full stomach!\n");
-            print_current_statistics(
-                points,
-                moves_made,
-                apples_eaten,
-                apples_remaining,
-                apples_initial,
-                points_remaining_total
-            );
-            return 0;
+            print_current_statistics(state);
+            return;
         }
     }
 }
 
-// Add your function definitions below this line
+int process_reset_command(
+    struct game_state *state,
+    const struct game_state *initial_state,
+    char command
+) {
+    if (command != 'r') {
+        return 0;
+    }
+
+    printf("--- Resetting Map ---\n");
+    *state = *initial_state;
+    print_board(state->board, state->snake.head_row, state->snake.head_col);
+    return 1;
+}
+
+int process_statistics_command(const struct game_state *state, char command) {
+    if (command != 'p') {
+        return 0;
+    }
+
+    print_current_statistics(state);
+    return 1;
+}
+
+int process_movement_command(
+    struct game_state *state,
+    char command,
+    enum turn_status *status
+) {
+    struct movement_context movement;
+    if (!initialise_movement_context(state, command, &movement)) {
+        return 0;
+    }
+
+    state->moves_made++;
+    apply_portal_if_needed(state, &movement);
+    evaluate_destination(state, &movement);
+    finalize_movement(state, &movement);
+
+    if (state->apples_remaining == 0) {
+        unlock_exits_if_needed(state);
+    }
+
+    if (movement.lose_game) {
+        *status = TURN_LOSE;
+    } else if (movement.win_game) {
+        *status = TURN_WIN;
+    } else {
+        *status = TURN_CONTINUE;
+    }
+
+    return 1;
+}
+
+int initialise_movement_context(
+    const struct game_state *state,
+    char command,
+    struct movement_context *movement
+) {
+    movement->delta_row = 0;
+    movement->delta_col = 0;
+    if (command == 'w') {
+        movement->delta_row = -1;
+    } else if (command == 'a') {
+        movement->delta_col = -1;
+    } else if (command == 's') {
+        movement->delta_row = 1;
+    } else if (command == 'd') {
+        movement->delta_col = 1;
+    } else {
+        return 0;
+    }
+
+    movement->attempted_row = state->snake.head_row + movement->delta_row;
+    movement->attempted_col = state->snake.head_col + movement->delta_col;
+    movement->new_row = movement->attempted_row;
+    movement->new_col = movement->attempted_col;
+    movement->should_add_segment = 0;
+    movement->consumed_reverse = 0;
+    movement->consumed_split = 0;
+    movement->lose_game = 0;
+    movement->win_game = 0;
+
+    if (!is_position_in_bounds(
+            movement->attempted_row,
+            movement->attempted_col
+        )) {
+        movement->lose_game = 1;
+        movement->destination = EMPTY;
+    } else {
+        const struct tile *attempted_tile =
+            &state->board[movement->attempted_row][movement->attempted_col];
+        movement->destination = attempted_tile->entity;
+    }
+
+    return 1;
+}
+
+void apply_portal_if_needed(
+    const struct game_state *state,
+    struct movement_context *movement
+) {
+    if (movement->lose_game || movement->destination != PORTAL) {
+        return;
+    }
+
+    int partner_row = movement->attempted_row;
+    int partner_col = movement->attempted_col;
+    if (!find_portal_partner(
+            &state->portals,
+            partner_row,
+            partner_col,
+            &partner_row,
+            &partner_col
+        )) {
+        partner_row = movement->attempted_row;
+        partner_col = movement->attempted_col;
+    }
+
+    movement->new_row = partner_row + movement->delta_row;
+    movement->new_col = partner_col + movement->delta_col;
+    if (!is_position_in_bounds(movement->new_row, movement->new_col)) {
+        movement->lose_game = 1;
+        return;
+    }
+
+    const struct tile *destination_tile =
+        &state->board[movement->new_row][movement->new_col];
+    movement->destination = destination_tile->entity;
+}
+
+void evaluate_destination(
+    struct game_state *state,
+    struct movement_context *movement
+) {
+    if (movement->lose_game) {
+        return;
+    }
+
+    if (
+        movement->destination == WALL ||
+        movement->destination == BODY_SEGMENT
+    ) {
+        movement->lose_game = 1;
+        return;
+    }
+    if (movement->destination == EXIT_LOCKED) {
+        if (state->apples_remaining == 0) {
+            state->board[movement->new_row][movement->new_col]
+                .entity = EXIT_UNLOCKED;
+            movement->win_game = 1;
+        } else {
+            movement->lose_game = 1;
+        }
+        return;
+    }
+    if (movement->destination == EXIT_UNLOCKED) {
+        movement->win_game = 1;
+        return;
+    }
+    if (
+        movement->destination == PASSAGE_UP ||
+        movement->destination == PASSAGE_DOWN ||
+        movement->destination == PASSAGE_LEFT ||
+        movement->destination == PASSAGE_RIGHT
+    ) {
+        handle_passage_tile(state, movement);
+        return;
+    }
+
+    handle_consumable_tile(state, movement);
+}
+
+void handle_passage_tile(
+    struct game_state *state,
+    struct movement_context *movement
+) {
+    int correct_direction = 0;
+    if (
+        movement->destination == PASSAGE_UP &&
+        movement->delta_row == -1
+    ) {
+        correct_direction = 1;
+    } else if (
+        movement->destination == PASSAGE_DOWN &&
+        movement->delta_row == 1
+    ) {
+        correct_direction = 1;
+    } else if (
+        movement->destination == PASSAGE_LEFT &&
+        movement->delta_col == -1
+    ) {
+        correct_direction = 1;
+    } else if (
+        movement->destination == PASSAGE_RIGHT &&
+        movement->delta_col == 1
+    ) {
+        correct_direction = 1;
+    }
+
+    if (!correct_direction) {
+        movement->lose_game = 1;
+        return;
+    }
+
+    movement->should_add_segment = 1;
+    struct tile *passage_tile =
+        &state->board[movement->new_row][movement->new_col];
+    passage_tile->entity = BODY_SEGMENT;
+}
+
+void handle_consumable_tile(
+    struct game_state *state,
+    struct movement_context *movement
+) {
+    movement->should_add_segment = 1;
+
+    if (movement->destination == APPLE_NORMAL) {
+        state->apples_eaten++;
+        state->apples_remaining--;
+        state->points += 5;
+        state->points_remaining_total -= 5;
+    } else if (movement->destination == APPLE_REVERSE) {
+        state->apples_eaten++;
+        state->apples_remaining--;
+        state->points += 10;
+        state->points_remaining_total -= 10;
+        movement->consumed_reverse = 1;
+    } else if (movement->destination == APPLE_SPLIT) {
+        state->apples_eaten++;
+        state->apples_remaining--;
+        state->points += 20;
+        state->points_remaining_total -= 20;
+        movement->consumed_split = 1;
+    }
+
+    if (state->points_remaining_total < 0) {
+        state->points_remaining_total = 0;
+    }
+
+    struct tile *consumed_tile =
+        &state->board[movement->new_row][movement->new_col];
+    consumed_tile->entity = BODY_SEGMENT;
+}
+
+void finalize_movement(
+    struct game_state *state,
+    struct movement_context *movement
+) {
+    if (movement->should_add_segment) {
+        int length = state->snake.length;
+        state->snake.rows[length] = movement->new_row;
+        state->snake.cols[length] = movement->new_col;
+        state->snake.length++;
+        state->snake.head_row = movement->new_row;
+        state->snake.head_col = movement->new_col;
+
+        if (movement->consumed_reverse) {
+            reverse_snake(
+                state->snake.rows,
+                state->snake.cols,
+                state->snake.length
+            );
+            state->snake.head_row = state->snake.rows[state->snake.length - 1];
+            state->snake.head_col = state->snake.cols[state->snake.length - 1];
+        }
+
+        if (movement->consumed_split) {
+            int body_segments = state->snake.length - 1;
+            int segments_to_remove = 0;
+            if (body_segments > 0) {
+                if (body_segments % 2 == 0) {
+                    segments_to_remove = body_segments / 2;
+                } else {
+                    segments_to_remove = (body_segments + 1) / 2;
+                }
+            }
+            if (segments_to_remove > 0) {
+                remove_tail_segments(
+                    state->board,
+                    state->snake.rows,
+                    state->snake.cols,
+                    &state->snake.length,
+                    segments_to_remove
+                );
+            }
+            state->snake.head_row = state->snake.rows[state->snake.length - 1];
+            state->snake.head_col = state->snake.cols[state->snake.length - 1];
+        }
+    } else if (movement->win_game || movement->lose_game) {
+        if (is_position_in_bounds(movement->new_row, movement->new_col)) {
+            state->snake.head_row = movement->new_row;
+            state->snake.head_col = movement->new_col;
+        }
+    }
+}
 
 int is_position_in_bounds(int row, int col) {
     return row >= 0 && row < ROWS && col >= 0 && col < COLS;
@@ -743,42 +995,34 @@ int can_place_long_wall(
     return 0;
 }
 
-void unlock_exits_if_needed(struct tile board[ROWS][COLS], int apples_remaining) {
-    if (apples_remaining != 0) {
+void unlock_exits_if_needed(struct game_state *state) {
+    if (state->apples_remaining != 0) {
         return;
     }
 
     for (int row = 0; row < ROWS; row++) {
         for (int col = 0; col < COLS; col++) {
-            if (board[row][col].entity == EXIT_LOCKED) {
-                board[row][col].entity = EXIT_UNLOCKED;
+            if (state->board[row][col].entity == EXIT_LOCKED) {
+                state->board[row][col].entity = EXIT_UNLOCKED;
             }
         }
     }
 }
 
-void print_current_statistics(
-    int points,
-    int moves_made,
-    int apples_eaten,
-    int apples_remaining,
-    int apples_initial,
-    int points_remaining_total
-) {
+void print_current_statistics(const struct game_state *state) {
     double completion_percentage = 100.0;
-    if (apples_initial != 0) {
-        completion_percentage = 100.0 * apples_eaten / (double)apples_initial;
+    if (state->apples_initial != 0) {
+        completion_percentage = 100.0 * state->apples_eaten /
+            (double)state->apples_initial;
     }
 
-    int maximum_points_remaining = points_remaining_total;
-
     print_game_statistics(
-        points,
-        moves_made,
-        apples_eaten,
-        apples_remaining,
+        state->points,
+        state->moves_made,
+        state->apples_eaten,
+        state->apples_remaining,
         completion_percentage,
-        maximum_points_remaining
+        state->points_remaining_total
     );
 }
 
@@ -824,41 +1068,22 @@ void remove_tail_segments(
     *snake_length = new_length;
 }
 
-void copy_board(
-    struct tile source[ROWS][COLS],
-    struct tile destination[ROWS][COLS]
-) {
-    for (int row = 0; row < ROWS; row++) {
-        for (int col = 0; col < COLS; col++) {
-            destination[row][col] = source[row][col];
-        }
-    }
-}
-
 int find_portal_partner(
-    int portal_pair_rows[][2],
-    int portal_pair_cols[][2],
-    int portal_pair_count,
+    const struct portal_pairs *portals,
     int row,
     int col,
     int *partner_row,
     int *partner_col
 ) {
-    for (int index = 0; index < portal_pair_count; index++) {
-        if (
-            portal_pair_rows[index][0] == row &&
-            portal_pair_cols[index][0] == col
-        ) {
-            *partner_row = portal_pair_rows[index][1];
-            *partner_col = portal_pair_cols[index][1];
+    for (int index = 0; index < portals->count; index++) {
+        if (portals->rows[index][0] == row && portals->cols[index][0] == col) {
+            *partner_row = portals->rows[index][1];
+            *partner_col = portals->cols[index][1];
             return 1;
         }
-        if (
-            portal_pair_rows[index][1] == row &&
-            portal_pair_cols[index][1] == col
-        ) {
-            *partner_row = portal_pair_rows[index][0];
-            *partner_col = portal_pair_cols[index][0];
+        if (portals->rows[index][1] == row && portals->cols[index][1] == col) {
+            *partner_row = portals->rows[index][0];
+            *partner_col = portals->cols[index][0];
             return 1;
         }
     }
@@ -1006,4 +1231,3 @@ void print_tile_spacer(void) {
     }
     printf("\n");
 }
-
