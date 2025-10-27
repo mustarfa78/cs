@@ -1,7 +1,8 @@
 // cs_snake.c
 // Written by Mustafa Abdalruhman z5688640 on 21/10/2025
 //
-// Description: <INSERT DESCRIPTION OF PROGRAM>
+// Description: Implementation of CS Snake with advanced setup and gameplay
+// features including rival snakes, portals, passages, and explosive apples.
 
 // Provided Libraries
 #include <stdio.h>
@@ -275,6 +276,7 @@ void update_points_for_destroyed_apple(
     enum entity apple_entity
 );
 int remove_snake_segment(struct snake_body *snake, int row, int col);
+int absolute_value(int number);
 
 
 // Provided sample main() function (you will need to modify this)
@@ -732,6 +734,7 @@ int run_spawning_phase(struct game_state *state) {
         return 0;
     }
 
+    printf("\n");
     print_board(state);
 
     if (!state->has_rival) {
@@ -750,6 +753,7 @@ int run_spawning_phase(struct game_state *state) {
     }
 
     state->current_turn = SNAKE_ORIGINAL;
+    printf("\n");
     print_board(state);
     return 1;
 }
@@ -801,10 +805,12 @@ void run_gameplay_phase(
 
         enum snake_id active_id = state->current_turn;
         int explosion_status = advance_explosions(state);
-        int active_mask =
-            active_id == SNAKE_ORIGINAL ? EXPLOSION_ORIGINAL : EXPLOSION_RIVAL;
-        int opponent_mask =
-            active_id == SNAKE_ORIGINAL ? EXPLOSION_RIVAL : EXPLOSION_ORIGINAL;
+        int active_mask = EXPLOSION_RIVAL;
+        int opponent_mask = EXPLOSION_ORIGINAL;
+        if (active_id == SNAKE_ORIGINAL) {
+            active_mask = EXPLOSION_ORIGINAL;
+            opponent_mask = EXPLOSION_RIVAL;
+        }
         int opponent_destroyed =
             state->has_rival && (explosion_status & opponent_mask);
 
@@ -872,8 +878,11 @@ void run_gameplay_phase(
         }
 
         if (state->has_rival) {
-            state->current_turn =
-                state->current_turn == SNAKE_ORIGINAL ? SNAKE_RIVAL : SNAKE_ORIGINAL;
+            if (state->current_turn == SNAKE_ORIGINAL) {
+                state->current_turn = SNAKE_RIVAL;
+            } else {
+                state->current_turn = SNAKE_ORIGINAL;
+            }
         }
     }
 }
@@ -953,17 +962,23 @@ int initialise_movement_context(
         return 0;
     }
 
-    movement->active_snake =
-        snake_id == SNAKE_ORIGINAL ? &state->snake : &state->rival_snake;
+    if (snake_id == SNAKE_ORIGINAL) {
+        movement->active_snake = &state->snake;
+        movement->active_stats = &state->original_stats;
+    } else {
+        movement->active_snake = &state->rival_snake;
+        movement->active_stats = &state->rival_stats;
+    }
     movement->opponent_snake = NULL;
-    movement->active_stats =
-        snake_id == SNAKE_ORIGINAL ? &state->original_stats : &state->rival_stats;
     movement->opponent_stats = NULL;
     if (state->has_rival) {
-        movement->opponent_snake =
-            snake_id == SNAKE_ORIGINAL ? &state->rival_snake : &state->snake;
-        movement->opponent_stats =
-            snake_id == SNAKE_ORIGINAL ? &state->rival_stats : &state->original_stats;
+        if (snake_id == SNAKE_ORIGINAL) {
+            movement->opponent_snake = &state->rival_snake;
+            movement->opponent_stats = &state->rival_stats;
+        } else {
+            movement->opponent_snake = &state->snake;
+            movement->opponent_stats = &state->original_stats;
+        }
     }
 
     movement->attempted_row =
@@ -1392,7 +1407,10 @@ int remove_snake_segment(struct snake_body *snake, int row, int col) {
                 snake->head_row = NO_SNAKE;
                 snake->head_col = NO_SNAKE;
             }
-            return was_head ? 1 : 0;
+            if (was_head) {
+                return 1;
+            }
+            return 0;
         }
     }
 
@@ -1482,6 +1500,15 @@ int destroy_entity_by_explosion(
     return explosion_result;
 }
 
+// Returns the magnitude of the supplied integer value.
+int absolute_value(int number) {
+    if (number < 0) {
+        return -number;
+    }
+
+    return number;
+}
+
 void clear_explosion_ring(
     struct game_state *state,
     int center_row,
@@ -1494,9 +1521,14 @@ void clear_explosion_ring(
 
     for (int delta_row = -distance; delta_row <= distance; delta_row++) {
         int row = center_row + delta_row;
-        int remaining = distance - (delta_row >= 0 ? delta_row : -delta_row);
-        int cols_to_check[2] = {center_col - remaining, center_col + remaining};
-        int positions = remaining == 0 ? 1 : 2;
+        int remaining = distance - absolute_value(delta_row);
+        int cols_to_check[2];
+        cols_to_check[0] = center_col - remaining;
+        cols_to_check[1] = center_col + remaining;
+        int positions = 2;
+        if (remaining == 0) {
+            positions = 1;
+        }
         for (int index = 0; index < positions; index++) {
             int col = cols_to_check[index];
             if (!is_position_in_bounds(row, col)) {
@@ -1524,9 +1556,14 @@ int apply_explosion_ring(
     int explosion_status = EXPLOSION_NONE;
     for (int delta_row = -distance; delta_row <= distance; delta_row++) {
         int row = center_row + delta_row;
-        int remaining = distance - (delta_row >= 0 ? delta_row : -delta_row);
-        int cols_to_check[2] = {center_col - remaining, center_col + remaining};
-        int positions = remaining == 0 ? 1 : 2;
+        int remaining = distance - absolute_value(delta_row);
+        int cols_to_check[2];
+        cols_to_check[0] = center_col - remaining;
+        cols_to_check[1] = center_col + remaining;
+        int positions = 2;
+        if (remaining == 0) {
+            positions = 1;
+        }
         for (int index = 0; index < positions; index++) {
             int col = cols_to_check[index];
             if (!is_position_in_bounds(row, col)) {
