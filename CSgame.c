@@ -719,6 +719,7 @@ int spawn_snake(
         stats->points = 0;
         stats->moves_made = 0;
         stats->apples_eaten = 0;
+        printf("\n");
         return 1;
     }
 }
@@ -734,10 +735,9 @@ int run_spawning_phase(struct game_state *state) {
         return 0;
     }
 
-    printf("\n");
-    print_board(state);
-
     if (!state->has_rival) {
+        printf("\n");
+        print_board(state);
         state->current_turn = SNAKE_ORIGINAL;
         return 1;
     }
