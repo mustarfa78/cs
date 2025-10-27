@@ -86,6 +86,7 @@ int can_place_long_wall(
     struct tile board[ROWS][COLS], int start_row, int start_col,
     char direction, int length
 );
+void unlock_exits_if_no_apples(struct tile board[ROWS][COLS], int apples_remaining);
 
 
 // Provided sample main() function (you will need to modify this)
@@ -96,6 +97,9 @@ int main(void) {
     initialise_board(board);
 
     printf("--- Map Setup ---\n");
+
+    int initial_apples = 0;
+    int apples_remaining = 0;
 
     char command;
     while (scanf(" %c", &command) == 1) {
@@ -177,6 +181,8 @@ int main(void) {
                 continue;
             }
             board[row][col].entity = APPLE_NORMAL;
+            initial_apples++;
+            apples_remaining++;
         } else if (command == 'W') {
             char direction;
             int row;
@@ -250,7 +256,126 @@ int main(void) {
         break;
     }
 
+    board[snake_row][snake_col].entity = BODY_SEGMENT;
     print_board(board, snake_row, snake_col);
+
+    printf("\n--- Gameplay Phase ---\n");
+
+    int points = 0;
+    int moves_made = 0;
+    int apples_eaten = 0;
+
+    while (1) {
+        char gameplay_command;
+        int read_result = scanf(" %c", &gameplay_command);
+        if (read_result != 1) {
+            printf("--- Quitting Game ---\n");
+            return 0;
+        }
+
+        int delta_row = 0;
+        int delta_col = 0;
+        if (gameplay_command == 'w') {
+            delta_row = -1;
+        } else if (gameplay_command == 'a') {
+            delta_col = -1;
+        } else if (gameplay_command == 's') {
+            delta_row = 1;
+        } else if (gameplay_command == 'd') {
+            delta_col = 1;
+        } else if (gameplay_command == 'p') {
+            int maximum_points_remaining = apples_remaining * 5;
+            double completion_percentage = 100.0;
+            if (initial_apples > 0) {
+                completion_percentage = 100.0 * apples_eaten / initial_apples;
+            }
+            print_game_statistics(
+                points,
+                moves_made,
+                apples_eaten,
+                apples_remaining,
+                completion_percentage,
+                maximum_points_remaining
+            );
+            continue;
+        } else {
+            continue;
+        }
+
+        moves_made++;
+
+        int new_row = snake_row + delta_row;
+        int new_col = snake_col + delta_col;
+        int position_in_bounds = is_position_in_bounds(new_row, new_col);
+
+        int snake_won = 0;
+        int snake_lost = 0;
+
+        if (!position_in_bounds) {
+            snake_lost = 1;
+        } else {
+            enum entity target_entity = board[new_row][new_col].entity;
+            if (target_entity == WALL || target_entity == EXIT_LOCKED || target_entity == BODY_SEGMENT) {
+                snake_lost = 1;
+            } else if (target_entity == EXIT_UNLOCKED) {
+                snake_won = 1;
+            } else if (target_entity == APPLE_NORMAL) {
+                board[new_row][new_col].entity = EMPTY;
+                apples_remaining--;
+                apples_eaten++;
+                points += 5;
+            }
+        }
+
+        board[snake_row][snake_col].entity = BODY_SEGMENT;
+
+        if (position_in_bounds) {
+            snake_row = new_row;
+            snake_col = new_col;
+        }
+
+        unlock_exits_if_no_apples(board, apples_remaining);
+
+        print_board(board, snake_row, snake_col);
+
+        if (snake_won) {
+            printf("--- Game Over ---\n");
+            printf("Ssslithered out with a full stomach!\n");
+            int maximum_points_remaining = apples_remaining * 5;
+            double completion_percentage = 100.0;
+            if (initial_apples > 0) {
+                completion_percentage = 100.0 * apples_eaten / initial_apples;
+            }
+            print_game_statistics(
+                points,
+                moves_made,
+                apples_eaten,
+                apples_remaining,
+                completion_percentage,
+                maximum_points_remaining
+            );
+            return 0;
+        }
+
+        if (snake_lost) {
+            printf("--- Game Over ---\n");
+            printf("Guessss I was the prey today.\n");
+            int maximum_points_remaining = apples_remaining * 5;
+            double completion_percentage = 100.0;
+            if (initial_apples > 0) {
+                completion_percentage = 100.0 * apples_eaten / initial_apples;
+            }
+            print_game_statistics(
+                points,
+                moves_made,
+                apples_eaten,
+                apples_remaining,
+                completion_percentage,
+                maximum_points_remaining
+            );
+            return 0;
+        }
+    }
 
     return 0;
 }
@@ -294,6 +419,20 @@ int can_place_long_wall(
     }
 
     return 0;
+}
+
+void unlock_exits_if_no_apples(struct tile board[ROWS][COLS], int apples_remaining) {
+    if (apples_remaining != 0) {
+        return;
+    }
+
+    for (int row = 0; row < ROWS; row++) {
+        for (int col = 0; col < COLS; col++) {
+            if (board[row][col].entity == EXIT_LOCKED) {
+                board[row][col].entity = EXIT_UNLOCKED;
+            }
+        }
+    }
 }
 
 
