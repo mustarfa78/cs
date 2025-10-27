@@ -7,7 +7,7 @@
 #include <stdio.h>
 
 // Add your own #include statements below this line
-
+#include <stdbool.h>
 
 // Provided constants
 #define ROWS 10 
@@ -80,7 +80,14 @@ void print_tile_spacer(void);
 void print_board_header(void);
 
 // Add your function prototypes below this line
-
+bool is_position_in_bounds(int row, int col);
+bool is_tile_empty(struct tile board[ROWS][COLS], int row, int col);
+bool can_place_wall_segment(
+    struct tile board[ROWS][COLS], int row, int col, int length, char direction
+);
+void place_wall_segment(
+    struct tile board[ROWS][COLS], int row, int col, int length, char direction
+);
 
 // Provided sample main() function (you will need to modify this)
 int main(void) {
@@ -89,12 +96,202 @@ int main(void) {
     struct tile board[ROWS][COLS];
     initialise_board(board);
 
+    printf("--- Map Setup ---\n");
+
+    char command;
+    while (scanf(" %c", &command) == 1) {
+        if (command == 's') {
+            break;
+        } else if (command == 'w') {
+            int row;
+            int col;
+            if (scanf(" %d %d", &row, &col) != 2) {
+                continue;
+            }
+            if (!is_position_in_bounds(row, col)) {
+                printf(
+                    "ERROR: Invalid position, %d %d is out of bounds!\n",
+                    row,
+                    col
+                );
+                continue;
+            }
+            if (!is_tile_empty(board, row, col)) {
+                printf(
+                    "ERROR: Invalid tile, %d %d is occupied!\n", row, col
+                );
+                continue;
+            }
+            board[row][col].entity = WALL;
+        } else if (command == 'e') {
+            int row;
+            int col;
+            if (scanf(" %d %d", &row, &col) != 2) {
+                continue;
+            }
+            if (!is_position_in_bounds(row, col)) {
+                printf(
+                    "ERROR: Invalid position, %d %d is out of bounds!\n",
+                    row,
+                    col
+                );
+                continue;
+            }
+            if (!is_tile_empty(board, row, col)) {
+                printf(
+                    "ERROR: Invalid tile, %d %d is occupied!\n", row, col
+                );
+                continue;
+            }
+            board[row][col].entity = EXIT_LOCKED;
+        } else if (command == 'a') {
+            char apple_type;
+            int row;
+            int col;
+            if (scanf(" %c %d %d", &apple_type, &row, &col) != 3) {
+                continue;
+            }
+            if (apple_type != 'n') {
+                continue;
+            }
+            if (!is_position_in_bounds(row, col)) {
+                printf(
+                    "ERROR: Invalid position, %d %d is out of bounds!\n",
+                    row,
+                    col
+                );
+                continue;
+            }
+            if (!is_tile_empty(board, row, col)) {
+                printf(
+                    "ERROR: Invalid tile, %d %d is occupied!\n", row, col
+                );
+                continue;
+            }
+            board[row][col].entity = APPLE_NORMAL;
+        } else if (command == 'W') {
+            char direction;
+            int row;
+            int col;
+            int length;
+            if (scanf(" %c %d %d %d", &direction, &row, &col, &length) != 4) {
+                continue;
+            }
+            if (!is_position_in_bounds(row, col)) {
+                printf(
+                    "ERROR: Invalid position, %d %d is out of bounds!\n",
+                    row,
+                    col
+                );
+                continue;
+            }
+            if (!can_place_wall_segment(board, row, col, length, direction)) {
+                continue;
+            }
+            place_wall_segment(board, row, col, length, direction);
+        } else {
+            // Ignore unknown commands
+        }
+    }
+
     print_board(board, NO_SNAKE, NO_SNAKE);
+
+    printf("--- Spawning Snake ---\n");
+
+    int snake_row;
+    int snake_col;
+    while (1) {
+        printf("Enter the snake's starting position: ");
+        if (scanf(" %d %d", &snake_row, &snake_col) != 2) {
+            continue;
+        }
+        if (!is_position_in_bounds(snake_row, snake_col)) {
+            printf(
+                "ERROR: Invalid position, %d %d is out of bounds!\n",
+                snake_row,
+                snake_col
+            );
+            continue;
+        }
+        if (!is_tile_empty(board, snake_row, snake_col)) {
+            printf(
+                "ERROR: Invalid tile, %d %d is occupied!\n",
+                snake_row,
+                snake_col
+            );
+            continue;
+        }
+        break;
+    }
+
+    print_board(board, snake_row, snake_col);
 
     return 0;
 }
 
 // Add your function definitions below this line
+
+
+bool is_position_in_bounds(int row, int col) {
+    return row >= 0 && row < ROWS && col >= 0 && col < COLS;
+}
+
+bool is_tile_empty(struct tile board[ROWS][COLS], int row, int col) {
+    return board[row][col].entity == EMPTY;
+}
+
+bool can_place_wall_segment(
+    struct tile board[ROWS][COLS], int row, int col, int length, char direction
+) {
+    if (direction == 'h') {
+        for (int offset = 0; offset < length; offset++) {
+            int check_col = col + offset;
+            if (!is_position_in_bounds(row, check_col)) {
+                printf(
+                    "ERROR: Invalid position, part of the wall is out of bounds!\n"
+                );
+                return false;
+            }
+            if (!is_tile_empty(board, row, check_col)) {
+                printf(
+                    "ERROR: Invalid tile, part of the wall is occupied!\n"
+                );
+                return false;
+            }
+        }
+    } else if (direction == 'v') {
+        for (int offset = 0; offset < length; offset++) {
+            int check_row = row + offset;
+            if (!is_position_in_bounds(check_row, col)) {
+                printf(
+                    "ERROR: Invalid position, part of the wall is out of bounds!\n"
+                );
+                return false;
+            }
+            if (!is_tile_empty(board, check_row, col)) {
+                printf(
+                    "ERROR: Invalid tile, part of the wall is occupied!\n"
+                );
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+void place_wall_segment(
+    struct tile board[ROWS][COLS], int row, int col, int length, char direction
+) {
+    if (direction == 'h') {
+        for (int offset = 0; offset < length; offset++) {
+            board[row][col + offset].entity = WALL;
+        }
+    } else if (direction == 'v') {
+        for (int offset = 0; offset < length; offset++) {
+            board[row + offset][col].entity = WALL;
+        }
+    }
+}
 
 
 // =============================================================================
