@@ -85,6 +85,14 @@ int can_place_long_wall(
     struct tile board[ROWS][COLS], int start_row, int start_col,
     char direction, int length
 );
+void unlock_exits_if_needed(struct tile board[ROWS][COLS], int apples_remaining);
+void print_current_statistics(
+    int points,
+    int moves_made,
+    int apples_eaten,
+    int apples_remaining,
+    int apples_initial
+);
 
 
 // Provided sample main() function (you will need to modify this)
@@ -97,6 +105,8 @@ int main(void) {
     printf("--- Map Setup ---\n");
 
     char command;
+    int apples_initial = 0;
+    int apples_remaining = 0;
     while (scanf(" %c", &command) == 1) {
         if (command == 's' || command == 'S') {
             break;
@@ -181,6 +191,8 @@ int main(void) {
                 continue;
             }
             board[row][col].entity = APPLE_NORMAL;
+            apples_initial++;
+            apples_remaining++;
             continue;
         }
 
@@ -266,9 +278,127 @@ int main(void) {
     }
 
     board[snake_row][snake_col].entity = BODY_SEGMENT;
-    print_board(board, snake_row, snake_col);
+    int snake_head_row = snake_row;
+    int snake_head_col = snake_col;
+    int moves_made = 0;
+    int apples_eaten = 0;
+    int points = 0;
 
-    return 0;
+    print_board(board, snake_head_row, snake_head_col);
+
+    printf("--- Gameplay Phase ---\n");
+
+    while (1) {
+        char gameplay_command;
+        int read_result = scanf(" %c", &gameplay_command);
+        if (read_result != 1) {
+            printf("--- Quitting Game ---\n");
+            return 0;
+        }
+
+        if (gameplay_command == 'p') {
+            print_current_statistics(
+                points,
+                moves_made,
+                apples_eaten,
+                apples_remaining,
+                apples_initial
+            );
+            continue;
+        }
+
+        int delta_row = 0;
+        int delta_col = 0;
+        if (gameplay_command == 'w') {
+            delta_row = -1;
+        } else if (gameplay_command == 'a') {
+            delta_col = -1;
+        } else if (gameplay_command == 's') {
+            delta_row = 1;
+        } else if (gameplay_command == 'd') {
+            delta_col = 1;
+        } else {
+            continue;
+        }
+
+        moves_made++;
+
+        int new_row = snake_head_row + delta_row;
+        int new_col = snake_head_col + delta_col;
+
+        int lose_game = 0;
+        int win_game = 0;
+
+        if (!is_position_in_bounds(new_row, new_col)) {
+            lose_game = 1;
+        } else {
+            enum entity target_entity = board[new_row][new_col].entity;
+            if (
+                target_entity == WALL ||
+                target_entity == BODY_SEGMENT
+            ) {
+                lose_game = 1;
+                snake_head_row = new_row;
+                snake_head_col = new_col;
+            } else if (target_entity == EXIT_LOCKED) {
+                if (apples_remaining == 0) {
+                    board[new_row][new_col].entity = EXIT_UNLOCKED;
+                    snake_head_row = new_row;
+                    snake_head_col = new_col;
+                    win_game = 1;
+                } else {
+                    lose_game = 1;
+                    snake_head_row = new_row;
+                    snake_head_col = new_col;
+                }
+            } else if (target_entity == EXIT_UNLOCKED) {
+                snake_head_row = new_row;
+                snake_head_col = new_col;
+                win_game = 1;
+            } else {
+                if (target_entity == APPLE_NORMAL) {
+                    apples_eaten++;
+                    apples_remaining--;
+                    points += 5;
+                }
+                snake_head_row = new_row;
+                snake_head_col = new_col;
+                board[new_row][new_col].entity = BODY_SEGMENT;
+            }
+        }
+
+        if (apples_remaining == 0) {
+            unlock_exits_if_needed(board, apples_remaining);
+        }
+
+        print_board(board, snake_head_row, snake_head_col);
+
+        if (lose_game) {
+            printf("--- Game Over ---\n");
+            printf("Guessss I was the prey today.\n");
+            print_current_statistics(
+                points,
+                moves_made,
+                apples_eaten,
+                apples_remaining,
+                apples_initial
+            );
+            return 0;
+        }
+
+        if (win_game) {
+            printf("--- Game Over ---\n");
+            printf("Ssslithered out with a full stomach!\n");
+            print_current_statistics(
+                points,
+                moves_made,
+                apples_eaten,
+                apples_remaining,
+                apples_initial
+            );
+            return 0;
+        }
+    }
 }
 
 // Add your function definitions below this line
@@ -310,6 +440,44 @@ int can_place_long_wall(
     }
 
     return 0;
+}
+
+void unlock_exits_if_needed(struct tile board[ROWS][COLS], int apples_remaining) {
+    if (apples_remaining != 0) {
+        return;
+    }
+
+    for (int row = 0; row < ROWS; row++) {
+        for (int col = 0; col < COLS; col++) {
+            if (board[row][col].entity == EXIT_LOCKED) {
+                board[row][col].entity = EXIT_UNLOCKED;
+            }
+        }
+    }
+}
+
+void print_current_statistics(
+    int points,
+    int moves_made,
+    int apples_eaten,
+    int apples_remaining,
+    int apples_initial
+) {
+    double completion_percentage = 100.0;
+    if (apples_initial != 0) {
+        completion_percentage = 100.0 * apples_eaten / (double)apples_initial;
+    }
+
+    int maximum_points_remaining = apples_remaining * 5;
+
+    print_game_statistics(
+        points,
+        moves_made,
+        apples_eaten,
+        apples_remaining,
+        completion_percentage,
+        maximum_points_remaining
+    );
 }
 
 
