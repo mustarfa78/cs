@@ -17,6 +17,7 @@
 
 #define MAX_SNAKE_LENGTH (ROWS * COLS)
 #define MAX_PORTAL_PAIRS 5
+#define MAX_EXPLOSIONS (ROWS * COLS)
 
 // Add your own #define constants below this line
 
@@ -47,6 +48,7 @@ enum entity {
 // Represents a tile/cell on the game board
 struct tile {
     enum entity entity;
+    int value;
 };
 
 // Add your own structs below this line
@@ -54,6 +56,7 @@ struct portal_pairs {
     int rows[MAX_PORTAL_PAIRS][2];
     int cols[MAX_PORTAL_PAIRS][2];
     int count;
+    int active[MAX_PORTAL_PAIRS];
 };
 
 struct snake_body {
@@ -62,6 +65,14 @@ struct snake_body {
     int length;
     int head_row;
     int head_col;
+};
+
+struct explosion {
+    int row;
+    int col;
+    int radius;
+    int current_step;
+    int active;
 };
 
 struct game_state {
@@ -74,6 +85,8 @@ struct game_state {
     int points;
     int moves_made;
     int points_remaining_total;
+    struct explosion explosions[MAX_EXPLOSIONS];
+    int explosion_count;
 };
 
 struct movement_context {
@@ -210,6 +223,33 @@ int find_portal_partner(
     int *partner_row,
     int *partner_col
 );
+int is_movement_command(char command);
+void start_explosion(struct game_state *state, int row, int col, int radius);
+int advance_explosions(struct game_state *state);
+void clear_explosion_ring(
+    struct game_state *state,
+    int center_row,
+    int center_col,
+    int distance
+);
+int apply_explosion_ring(
+    struct game_state *state,
+    int center_row,
+    int center_col,
+    int distance
+);
+void destroy_entity_by_explosion(
+    struct game_state *state,
+    int row,
+    int col,
+    int *head_destroyed
+);
+void deactivate_portal_pair(struct game_state *state, int row, int col);
+void update_points_for_destroyed_apple(
+    struct game_state *state,
+    enum entity apple_entity
+);
+int remove_snake_segment(struct game_state *state, int row, int col);
 
 
 // Provided sample main() function (you will need to modify this)
@@ -244,12 +284,23 @@ void initialise_game_state(struct game_state *state) {
     state->snake.head_row = NO_SNAKE;
     state->snake.head_col = NO_SNAKE;
     state->portals.count = 0;
+    for (int index = 0; index < MAX_PORTAL_PAIRS; index++) {
+        state->portals.active[index] = 0;
+    }
     state->apples_initial = 0;
     state->apples_remaining = 0;
     state->apples_eaten = 0;
     state->points = 0;
     state->moves_made = 0;
     state->points_remaining_total = 0;
+    state->explosion_count = 0;
+    for (int index = 0; index < MAX_EXPLOSIONS; index++) {
+        state->explosions[index].active = 0;
+        state->explosions[index].current_step = 0;
+        state->explosions[index].radius = 0;
+        state->explosions[index].row = 0;
+        state->explosions[index].col = 0;
+    }
 }
 
 void run_setup_phase(struct game_state *state) {
@@ -350,26 +401,41 @@ int handle_exit_command(struct game_state *state) {
 
 int handle_apple_command(struct game_state *state) {
     char apple_type;
-    int row;
-    int col;
-    if (scanf(" %c %d %d", &apple_type, &row, &col) != 3) {
+    if (scanf(" %c", &apple_type) != 1) {
         discard_line();
         return 1;
     }
 
+    int row = 0;
+    int col = 0;
+    int radius = 0;
     enum entity apple_entity = EMPTY;
     int apple_points = 0;
-    if (apple_type == 'n') {
-        apple_entity = APPLE_NORMAL;
-        apple_points = 5;
-    } else if (apple_type == 'r') {
-        apple_entity = APPLE_REVERSE;
-        apple_points = 10;
-    } else if (apple_type == 's') {
-        apple_entity = APPLE_SPLIT;
+
+    if (apple_type == 'e') {
+        if (scanf("%d %d %d", &radius, &row, &col) != 3) {
+            discard_line();
+            return 1;
+        }
+        apple_entity = APPLE_EXPLODE;
         apple_points = 20;
     } else {
-        return 1;
+        if (scanf("%d %d", &row, &col) != 2) {
+            discard_line();
+            return 1;
+        }
+        if (apple_type == 'n') {
+            apple_entity = APPLE_NORMAL;
+            apple_points = 5;
+        } else if (apple_type == 'r') {
+            apple_entity = APPLE_REVERSE;
+            apple_points = 10;
+        } else if (apple_type == 's') {
+            apple_entity = APPLE_SPLIT;
+            apple_points = 20;
+        } else {
+            return 1;
+        }
     }
 
     if (!is_position_in_bounds(row, col)) {
@@ -389,7 +455,9 @@ int handle_apple_command(struct game_state *state) {
         return 1;
     }
 
-    state->board[row][col].entity = apple_entity;
+    struct tile *target_tile = &state->board[row][col];
+    target_tile->entity = apple_entity;
+    target_tile->value = radius;
     state->apples_initial++;
     state->apples_remaining++;
     state->points_remaining_total += apple_points;
@@ -502,6 +570,7 @@ int handle_portal_command(struct game_state *state) {
     state->portals.cols[state->portals.count][0] = col1;
     state->portals.rows[state->portals.count][1] = row2;
     state->portals.cols[state->portals.count][1] = col2;
+    state->portals.active[state->portals.count] = 1;
     state->portals.count++;
     return 1;
 }
@@ -617,6 +686,14 @@ void save_initial_state(
     initial_state->points = 0;
     initial_state->moves_made = 0;
     initial_state->apples_eaten = 0;
+    initial_state->explosion_count = 0;
+    for (int index = 0; index < MAX_EXPLOSIONS; index++) {
+        initial_state->explosions[index].active = 0;
+        initial_state->explosions[index].current_step = 0;
+        initial_state->explosions[index].radius = 0;
+        initial_state->explosions[index].row = 0;
+        initial_state->explosions[index].col = 0;
+    }
 }
 
 void run_gameplay_phase(
@@ -635,6 +712,18 @@ void run_gameplay_phase(
         }
         if (process_statistics_command(state, command)) {
             continue;
+        }
+
+        if (!is_movement_command(command)) {
+            continue;
+        }
+
+        if (advance_explosions(state)) {
+            print_board(state->board, state->snake.head_row, state->snake.head_col);
+            printf("--- Game Over ---\n");
+            printf("Guessss I was the prey today.\n");
+            print_current_statistics(state);
+            return;
         }
 
         enum turn_status status = TURN_CONTINUE;
@@ -774,8 +863,8 @@ void apply_portal_if_needed(
             &partner_row,
             &partner_col
         )) {
-        partner_row = movement->attempted_row;
-        partner_col = movement->attempted_col;
+        movement->lose_game = 1;
+        return;
     }
 
     movement->new_row = partner_row + movement->delta_row;
@@ -817,6 +906,10 @@ void evaluate_destination(
     }
     if (movement->destination == EXIT_UNLOCKED) {
         movement->win_game = 1;
+        return;
+    }
+    if (movement->destination == EXPLOSION) {
+        movement->lose_game = 1;
         return;
     }
     if (
@@ -876,6 +969,10 @@ void handle_consumable_tile(
 ) {
     movement->should_add_segment = 1;
 
+    struct tile *consumed_tile =
+        &state->board[movement->new_row][movement->new_col];
+    int explosion_radius = consumed_tile->value;
+
     if (movement->destination == APPLE_NORMAL) {
         state->apples_eaten++;
         state->apples_remaining--;
@@ -893,15 +990,22 @@ void handle_consumable_tile(
         state->points += 20;
         state->points_remaining_total -= 20;
         movement->consumed_split = 1;
+    } else if (movement->destination == APPLE_EXPLODE) {
+        state->apples_eaten++;
+        state->apples_remaining--;
+        state->points += 20;
+        state->points_remaining_total -= 20;
+        consumed_tile->value = 0;
+        start_explosion(state, movement->new_row, movement->new_col,
+            explosion_radius);
     }
 
     if (state->points_remaining_total < 0) {
         state->points_remaining_total = 0;
     }
 
-    struct tile *consumed_tile =
-        &state->board[movement->new_row][movement->new_col];
     consumed_tile->entity = BODY_SEGMENT;
+    consumed_tile->value = 0;
 }
 
 void finalize_movement(
@@ -1076,6 +1180,9 @@ int find_portal_partner(
     int *partner_col
 ) {
     for (int index = 0; index < portals->count; index++) {
+        if (!portals->active[index]) {
+            continue;
+        }
         if (portals->rows[index][0] == row && portals->cols[index][0] == col) {
             *partner_row = portals->rows[index][1];
             *partner_col = portals->cols[index][1];
@@ -1091,6 +1198,234 @@ int find_portal_partner(
     return 0;
 }
 
+int is_movement_command(char command) {
+    return command == 'w' || command == 'a' || command == 's' || command == 'd';
+}
+
+int remove_snake_segment(struct game_state *state, int row, int col) {
+    struct snake_body *snake = &state->snake;
+    for (int index = 0; index < snake->length; index++) {
+        if (snake->rows[index] == row && snake->cols[index] == col) {
+            for (int shift = index; shift < snake->length - 1; shift++) {
+                snake->rows[shift] = snake->rows[shift + 1];
+                snake->cols[shift] = snake->cols[shift + 1];
+            }
+            snake->length--;
+            if (snake->length > 0) {
+                snake->head_row = snake->rows[snake->length - 1];
+                snake->head_col = snake->cols[snake->length - 1];
+            } else {
+                snake->head_row = NO_SNAKE;
+                snake->head_col = NO_SNAKE;
+            }
+            return index == snake->length;
+        }
+    }
+
+    return 0;
+}
+
+void update_points_for_destroyed_apple(
+    struct game_state *state,
+    enum entity apple_entity
+) {
+    if (state->apples_remaining > 0) {
+        state->apples_remaining--;
+    }
+    state->apples_eaten++;
+
+    int apple_points = 0;
+    if (apple_entity == APPLE_NORMAL) {
+        apple_points = 5;
+    } else if (apple_entity == APPLE_REVERSE) {
+        apple_points = 10;
+    } else {
+        apple_points = 20;
+    }
+
+    if (state->points_remaining_total > apple_points) {
+        state->points_remaining_total -= apple_points;
+    } else {
+        state->points_remaining_total = 0;
+    }
+}
+
+void deactivate_portal_pair(struct game_state *state, int row, int col) {
+    for (int index = 0; index < state->portals.count; index++) {
+        if (
+            state->portals.rows[index][0] == row &&
+            state->portals.cols[index][0] == col
+        ) {
+            state->portals.active[index] = 0;
+            return;
+        }
+        if (
+            state->portals.rows[index][1] == row &&
+            state->portals.cols[index][1] == col
+        ) {
+            state->portals.active[index] = 0;
+            return;
+        }
+    }
+}
+
+void destroy_entity_by_explosion(
+    struct game_state *state,
+    int row,
+    int col,
+    int *head_destroyed
+) {
+    struct tile *tile = &state->board[row][col];
+    enum entity entity = tile->entity;
+
+    if (entity == EXIT_LOCKED || entity == EXIT_UNLOCKED) {
+        return;
+    }
+    if (entity == PORTAL) {
+        deactivate_portal_pair(state, row, col);
+    } else if (entity == BODY_SEGMENT) {
+        int removed_head = remove_snake_segment(state, row, col);
+        if (removed_head) {
+            state->snake.head_row = NO_SNAKE;
+            state->snake.head_col = NO_SNAKE;
+            *head_destroyed = 1;
+        }
+    } else if (
+        entity == APPLE_NORMAL ||
+        entity == APPLE_REVERSE ||
+        entity == APPLE_SPLIT ||
+        entity == APPLE_EXPLODE
+    ) {
+        update_points_for_destroyed_apple(state, entity);
+    }
+
+    tile->entity = EXPLOSION;
+    tile->value = 0;
+}
+
+void clear_explosion_ring(
+    struct game_state *state,
+    int center_row,
+    int center_col,
+    int distance
+) {
+    if (distance <= 0) {
+        return;
+    }
+
+    for (int delta_row = -distance; delta_row <= distance; delta_row++) {
+        int row = center_row + delta_row;
+        int remaining = distance - (delta_row >= 0 ? delta_row : -delta_row);
+        int cols_to_check[2] = {center_col - remaining, center_col + remaining};
+        int positions = remaining == 0 ? 1 : 2;
+        for (int index = 0; index < positions; index++) {
+            int col = cols_to_check[index];
+            if (!is_position_in_bounds(row, col)) {
+                continue;
+            }
+            struct tile *tile = &state->board[row][col];
+            if (tile->entity == EXPLOSION) {
+                tile->entity = EMPTY;
+                tile->value = 0;
+            }
+        }
+    }
+}
+
+int apply_explosion_ring(
+    struct game_state *state,
+    int center_row,
+    int center_col,
+    int distance
+) {
+    if (distance <= 0) {
+        return 0;
+    }
+
+    int head_destroyed = 0;
+    for (int delta_row = -distance; delta_row <= distance; delta_row++) {
+        int row = center_row + delta_row;
+        int remaining = distance - (delta_row >= 0 ? delta_row : -delta_row);
+        int cols_to_check[2] = {center_col - remaining, center_col + remaining};
+        int positions = remaining == 0 ? 1 : 2;
+        for (int index = 0; index < positions; index++) {
+            int col = cols_to_check[index];
+            if (!is_position_in_bounds(row, col)) {
+                continue;
+            }
+            enum entity entity = state->board[row][col].entity;
+            if (entity == EXIT_LOCKED || entity == EXIT_UNLOCKED) {
+                continue;
+            }
+            destroy_entity_by_explosion(state, row, col, &head_destroyed);
+        }
+    }
+
+    if (state->apples_remaining == 0) {
+        unlock_exits_if_needed(state);
+    }
+    return head_destroyed;
+}
+
+void start_explosion(struct game_state *state, int row, int col, int radius) {
+    if (radius <= 0) {
+        return;
+    }
+
+    for (int index = 0; index < MAX_EXPLOSIONS; index++) {
+        if (state->explosions[index].active) {
+            continue;
+        }
+        state->explosions[index].active = 1;
+        state->explosions[index].row = row;
+        state->explosions[index].col = col;
+        state->explosions[index].radius = radius;
+        state->explosions[index].current_step = 1;
+        state->explosion_count++;
+        apply_explosion_ring(state, row, col, 1);
+        return;
+    }
+}
+
+int advance_explosions(struct game_state *state) {
+    if (state->explosion_count == 0) {
+        return 0;
+    }
+
+    for (int index = 0; index < MAX_EXPLOSIONS; index++) {
+        if (!state->explosions[index].active) {
+            continue;
+        }
+        clear_explosion_ring(
+            state,
+            state->explosions[index].row,
+            state->explosions[index].col,
+            state->explosions[index].current_step
+        );
+    }
+
+    int head_destroyed = 0;
+    int active_total = 0;
+    for (int index = 0; index < MAX_EXPLOSIONS; index++) {
+        if (!state->explosions[index].active) {
+            continue;
+        }
+        struct explosion *boom = &state->explosions[index];
+        if (boom->current_step >= boom->radius) {
+            boom->active = 0;
+            continue;
+        }
+        boom->current_step++;
+        if (apply_explosion_ring(state, boom->row, boom->col, boom->current_step)) {
+            head_destroyed = 1;
+        }
+        active_total++;
+    }
+
+    state->explosion_count = active_total;
+    return head_destroyed;
+}
+
 
 // =============================================================================
 // EDITABLE Provided Functions
@@ -1101,6 +1436,7 @@ void initialise_board(struct tile board[ROWS][COLS]) {
     for (int row = 0; row < ROWS; row++) {
         for (int col = 0; col < COLS; col++) {
             board[row][col].entity = EMPTY;
+            board[row][col].value = 0;
         }
     }
 }
@@ -1135,6 +1471,8 @@ void print_board(
                 printf("(R)");
             } else if (tile.entity == APPLE_SPLIT) {
                 printf("(S)");
+            } else if (tile.entity == APPLE_EXPLODE) {
+                printf("(%d)", tile.value);
             } else if (tile.entity == PASSAGE_UP) {
                 printf("^^^");
             } else if (tile.entity == PASSAGE_DOWN) {
