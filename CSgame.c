@@ -80,6 +80,12 @@ void print_tile_spacer(void);
 void print_board_header(void);
 
 // Add your function prototypes below this line
+int is_position_in_bounds(int row, int col);
+int is_tile_empty(struct tile board[ROWS][COLS], int row, int col);
+int can_place_long_wall(
+    struct tile board[ROWS][COLS], int start_row, int start_col,
+    char direction, int length
+);
 
 
 // Provided sample main() function (you will need to modify this)
@@ -89,12 +95,206 @@ int main(void) {
     struct tile board[ROWS][COLS];
     initialise_board(board);
 
+    printf("--- Map Setup ---\n");
+
+    char command;
+    while (scanf(" %c", &command) == 1) {
+        if (command == 's') {
+            break;
+        } else if (command == 'w') {
+            int row;
+            int col;
+            if (scanf("%d %d", &row, &col) != 2) {
+                continue;
+            }
+            if (!is_position_in_bounds(row, col)) {
+                printf(
+                    "ERROR: Invalid position, %d %d is out of bounds!\n",
+                    row,
+                    col
+                );
+                continue;
+            }
+            if (!is_tile_empty(board, row, col)) {
+                printf(
+                    "ERROR: Invalid tile, %d %d is occupied!\n",
+                    row,
+                    col
+                );
+                continue;
+            }
+            board[row][col].entity = WALL;
+        } else if (command == 'e') {
+            int row;
+            int col;
+            if (scanf("%d %d", &row, &col) != 2) {
+                continue;
+            }
+            if (!is_position_in_bounds(row, col)) {
+                printf(
+                    "ERROR: Invalid position, %d %d is out of bounds!\n",
+                    row,
+                    col
+                );
+                continue;
+            }
+            if (!is_tile_empty(board, row, col)) {
+                printf(
+                    "ERROR: Invalid tile, %d %d is occupied!\n",
+                    row,
+                    col
+                );
+                continue;
+            }
+            board[row][col].entity = EXIT_LOCKED;
+        } else if (command == 'a') {
+            char apple_type;
+            if (scanf(" %c", &apple_type) != 1) {
+                continue;
+            }
+            int row;
+            int col;
+            if (scanf("%d %d", &row, &col) != 2) {
+                continue;
+            }
+            if (apple_type != 'n') {
+                continue;
+            }
+            if (!is_position_in_bounds(row, col)) {
+                printf(
+                    "ERROR: Invalid position, %d %d is out of bounds!\n",
+                    row,
+                    col
+                );
+                continue;
+            }
+            if (!is_tile_empty(board, row, col)) {
+                printf(
+                    "ERROR: Invalid tile, %d %d is occupied!\n",
+                    row,
+                    col
+                );
+                continue;
+            }
+            board[row][col].entity = APPLE_NORMAL;
+        } else if (command == 'W') {
+            char direction;
+            int row;
+            int col;
+            int length;
+            if (scanf(" %c %d %d %d", &direction, &row, &col, &length) != 4) {
+                continue;
+            }
+            if (!is_position_in_bounds(row, col)) {
+                printf(
+                    "ERROR: Invalid position, %d %d is out of bounds!\n",
+                    row,
+                    col
+                );
+                continue;
+            }
+            int placement_check = can_place_long_wall(board, row, col, direction, length);
+            if (placement_check == 1) {
+                printf(
+                    "ERROR: Invalid position, part of the wall is out of bounds!\n"
+                );
+                continue;
+            } else if (placement_check == 2) {
+                printf(
+                    "ERROR: Invalid tile, part of the wall is occupied!\n"
+                );
+                continue;
+            }
+            int row_delta = 0;
+            int col_delta = 0;
+            if (direction == 'h') {
+                col_delta = 1;
+            } else if (direction == 'v') {
+                row_delta = 1;
+            }
+            for (int index = 0; index < length; index++) {
+                int target_row = row + row_delta * index;
+                int target_col = col + col_delta * index;
+                board[target_row][target_col].entity = WALL;
+            }
+        }
+    }
+
     print_board(board, NO_SNAKE, NO_SNAKE);
+
+    printf("\n--- Spawning Snake ---\n");
+
+    int snake_row = NO_SNAKE;
+    int snake_col = NO_SNAKE;
+    while (1) {
+        printf("Enter the snake's starting position: ");
+        if (scanf("%d %d", &snake_row, &snake_col) != 2) {
+            continue;
+        }
+        if (!is_position_in_bounds(snake_row, snake_col)) {
+            printf(
+                "ERROR: Invalid position, %d %d is out of bounds!\n",
+                snake_row,
+                snake_col
+            );
+            continue;
+        }
+        if (!is_tile_empty(board, snake_row, snake_col)) {
+            printf(
+                "ERROR: Invalid tile, %d %d is occupied!\n",
+                snake_row,
+                snake_col
+            );
+            continue;
+        }
+        break;
+    }
+
+    print_board(board, snake_row, snake_col);
 
     return 0;
 }
 
 // Add your function definitions below this line
+
+int is_position_in_bounds(int row, int col) {
+    return row >= 0 && row < ROWS && col >= 0 && col < COLS;
+}
+
+int is_tile_empty(struct tile board[ROWS][COLS], int row, int col) {
+    return board[row][col].entity == EMPTY;
+}
+
+int can_place_long_wall(
+    struct tile board[ROWS][COLS], int start_row, int start_col,
+    char direction, int length
+) {
+    int row_delta = 0;
+    int col_delta = 0;
+    if (direction == 'h') {
+        col_delta = 1;
+    } else if (direction == 'v') {
+        row_delta = 1;
+    }
+
+    for (int index = 0; index < length; index++) {
+        int target_row = start_row + row_delta * index;
+        int target_col = start_col + col_delta * index;
+        if (!is_position_in_bounds(target_row, target_col)) {
+            return 1;
+        }
+    }
+
+    for (int index = 0; index < length; index++) {
+        int target_row = start_row + row_delta * index;
+        int target_col = start_col + col_delta * index;
+        if (!is_tile_empty(board, target_row, target_col)) {
+            return 2;
+        }
+    }
+
+    return 0;
+}
 
 
 // =============================================================================
