@@ -429,6 +429,7 @@ int main(void) {
     snake_initialise(&snake, snake_row, snake_col);
     snake_copy(&initial_snake, &snake);
     copy_board(board, initial_board);
+    printf("\n");
     print_board(board, snake_row, snake_col);
 
     printf("\n--- Gameplay Phase ---\n");
