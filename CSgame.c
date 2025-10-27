@@ -16,6 +16,7 @@
 #define NO_SNAKE -1
 
 #define MAX_SNAKE_LENGTH (ROWS * COLS)
+#define MAX_PORTAL_PAIRS 5
 
 // Add your own #define constants below this line
 
@@ -105,6 +106,19 @@ void remove_tail_segments(
     int *snake_length,
     int segments_to_remove
 );
+void copy_board(
+    struct tile source[ROWS][COLS],
+    struct tile destination[ROWS][COLS]
+);
+int find_portal_partner(
+    int portal_pair_rows[][2],
+    int portal_pair_cols[][2],
+    int portal_pair_count,
+    int row,
+    int col,
+    int *partner_row,
+    int *partner_col
+);
 
 
 // Provided sample main() function (you will need to modify this)
@@ -113,6 +127,16 @@ int main(void) {
 
     struct tile board[ROWS][COLS];
     initialise_board(board);
+    struct tile initial_board[ROWS][COLS];
+
+    int initial_snake_rows[MAX_SNAKE_LENGTH];
+    int initial_snake_cols[MAX_SNAKE_LENGTH];
+    int initial_snake_length = 0;
+    int initial_snake_head_row = NO_SNAKE;
+    int initial_snake_head_col = NO_SNAKE;
+    int initial_apples_remaining = 0;
+    int initial_points_remaining_total = 0;
+    int initial_apples_eaten = 0;
 
     printf("--- Map Setup ---\n");
 
@@ -123,6 +147,9 @@ int main(void) {
     int snake_rows[MAX_SNAKE_LENGTH];
     int snake_cols[MAX_SNAKE_LENGTH];
     int snake_length = 0;
+    int portal_pair_rows[MAX_PORTAL_PAIRS][2];
+    int portal_pair_cols[MAX_PORTAL_PAIRS][2];
+    int portal_pair_count = 0;
     while (scanf(" %c", &command) == 1) {
         if (command == 's' || command == 'S') {
             break;
@@ -265,6 +292,63 @@ int main(void) {
             continue;
         }
 
+        if (command == 't') {
+            int row1;
+            int col1;
+            int row2;
+            int col2;
+            if (scanf("%d %d %d %d", &row1, &col1, &row2, &col2) != 4) {
+                continue;
+            }
+            if (portal_pair_count >= MAX_PORTAL_PAIRS) {
+                printf(
+                    "ERROR: Invalid placement, maximum number of portal pairs already reached!\n"
+                );
+                continue;
+            }
+            if (!is_position_in_bounds(row1, col1)) {
+                printf(
+                    "ERROR: Invalid position for first portal in pair, %d %d is out of bounds!\n",
+                    row1,
+                    col1
+                );
+                continue;
+            }
+            if (!is_tile_empty(board, row1, col1)) {
+                printf(
+                    "ERROR: Invalid tile for first portal in pair, %d %d is occupied!\n",
+                    row1,
+                    col1
+                );
+                continue;
+            }
+            if (!is_position_in_bounds(row2, col2)) {
+                printf(
+                    "ERROR: Invalid position for second portal in pair, %d %d is out of bounds!\n",
+                    row2,
+                    col2
+                );
+                continue;
+            }
+            if ((row1 != row2 || col1 != col2) && !is_tile_empty(board, row2, col2)) {
+                printf(
+                    "ERROR: Invalid tile for second portal in pair, %d %d is occupied!\n",
+                    row2,
+                    col2
+                );
+                continue;
+            }
+
+            board[row1][col1].entity = PORTAL;
+            board[row2][col2].entity = PORTAL;
+            portal_pair_rows[portal_pair_count][0] = row1;
+            portal_pair_cols[portal_pair_count][0] = col1;
+            portal_pair_rows[portal_pair_count][1] = row2;
+            portal_pair_cols[portal_pair_count][1] = col2;
+            portal_pair_count++;
+            continue;
+        }
+
         if (command == 'W') {
             char direction;
             int row;
@@ -356,6 +440,18 @@ int main(void) {
     int apples_eaten = 0;
     int points = 0;
 
+    copy_board(board, initial_board);
+    initial_snake_length = snake_length;
+    initial_snake_head_row = snake_head_row;
+    initial_snake_head_col = snake_head_col;
+    for (int index = 0; index < snake_length; index++) {
+        initial_snake_rows[index] = snake_rows[index];
+        initial_snake_cols[index] = snake_cols[index];
+    }
+    initial_apples_remaining = apples_remaining;
+    initial_points_remaining_total = points_remaining_total;
+    initial_apples_eaten = apples_eaten;
+
     print_board(board, snake_head_row, snake_head_col);
 
     printf("--- Gameplay Phase ---\n");
@@ -366,6 +462,25 @@ int main(void) {
         if (read_result != 1) {
             printf("--- Quitting Game ---\n");
             return 0;
+        }
+
+        if (gameplay_command == 'r') {
+            printf("--- Resetting Map ---\n");
+            copy_board(initial_board, board);
+            for (int index = 0; index < initial_snake_length; index++) {
+                snake_rows[index] = initial_snake_rows[index];
+                snake_cols[index] = initial_snake_cols[index];
+            }
+            snake_length = initial_snake_length;
+            snake_head_row = initial_snake_head_row;
+            snake_head_col = initial_snake_head_col;
+            apples_remaining = initial_apples_remaining;
+            apples_eaten = initial_apples_eaten;
+            points_remaining_total = initial_points_remaining_total;
+            points = 0;
+            moves_made = 0;
+            print_board(board, snake_head_row, snake_head_col);
+            continue;
         }
 
         if (gameplay_command == 'p') {
@@ -396,8 +511,10 @@ int main(void) {
 
         moves_made++;
 
-        int new_row = snake_head_row + delta_row;
-        int new_col = snake_head_col + delta_col;
+        int attempted_row = snake_head_row + delta_row;
+        int attempted_col = snake_head_col + delta_col;
+        int new_row = attempted_row;
+        int new_col = attempted_col;
 
         int lose_game = 0;
         int win_game = 0;
@@ -406,75 +523,103 @@ int main(void) {
         int consumed_reverse = 0;
         int consumed_split = 0;
 
-        if (!is_position_in_bounds(new_row, new_col)) {
+        if (!is_position_in_bounds(attempted_row, attempted_col)) {
             lose_game = 1;
         } else {
-            enum entity target_entity = board[new_row][new_col].entity;
+            enum entity destination_entity = board[attempted_row][attempted_col].entity;
 
-            if (target_entity == WALL || target_entity == BODY_SEGMENT) {
-                lose_game = 1;
-            } else if (target_entity == EXIT_LOCKED) {
-                if (apples_remaining == 0) {
-                    board[new_row][new_col].entity = EXIT_UNLOCKED;
-                    win_game = 1;
-                } else {
-                    lose_game = 1;
+            if (destination_entity == PORTAL) {
+                int partner_row = attempted_row;
+                int partner_col = attempted_col;
+                if (!find_portal_partner(
+                        portal_pair_rows,
+                        portal_pair_cols,
+                        portal_pair_count,
+                        attempted_row,
+                        attempted_col,
+                        &partner_row,
+                        &partner_col)) {
+                    partner_row = attempted_row;
+                    partner_col = attempted_col;
                 }
-            } else if (target_entity == EXIT_UNLOCKED) {
-                win_game = 1;
-            } else if (
-                target_entity == PASSAGE_UP ||
-                target_entity == PASSAGE_DOWN ||
-                target_entity == PASSAGE_LEFT ||
-                target_entity == PASSAGE_RIGHT
-            ) {
-                int correct_direction = 0;
-                if (target_entity == PASSAGE_UP && delta_row == -1) {
-                    correct_direction = 1;
-                } else if (target_entity == PASSAGE_DOWN && delta_row == 1) {
-                    correct_direction = 1;
-                } else if (target_entity == PASSAGE_LEFT && delta_col == -1) {
-                    correct_direction = 1;
-                } else if (target_entity == PASSAGE_RIGHT && delta_col == 1) {
-                    correct_direction = 1;
-                }
-
-                if (correct_direction) {
-                    should_add_segment = 1;
-                    board[new_row][new_col].entity = BODY_SEGMENT;
-                } else {
+                new_row = partner_row + delta_row;
+                new_col = partner_col + delta_col;
+                if (!is_position_in_bounds(new_row, new_col)) {
                     lose_game = 1;
+                } else {
+                    destination_entity = board[new_row][new_col].entity;
                 }
             } else {
-                should_add_segment = 1;
+                new_row = attempted_row;
+                new_col = attempted_col;
+            }
 
-                if (target_entity == APPLE_NORMAL) {
-                    apple_value = 5;
-                    apples_eaten++;
-                    apples_remaining--;
-                    points += apple_value;
-                    points_remaining_total -= apple_value;
-                } else if (target_entity == APPLE_REVERSE) {
-                    apple_value = 10;
-                    apples_eaten++;
-                    apples_remaining--;
-                    points += apple_value;
-                    points_remaining_total -= apple_value;
-                    consumed_reverse = 1;
-                } else if (target_entity == APPLE_SPLIT) {
-                    apple_value = 20;
-                    apples_eaten++;
-                    apples_remaining--;
-                    points += apple_value;
-                    points_remaining_total -= apple_value;
-                    consumed_split = 1;
+            if (!lose_game) {
+                if (destination_entity == WALL || destination_entity == BODY_SEGMENT) {
+                    lose_game = 1;
+                } else if (destination_entity == EXIT_LOCKED) {
+                    if (apples_remaining == 0) {
+                        board[new_row][new_col].entity = EXIT_UNLOCKED;
+                        win_game = 1;
+                    } else {
+                        lose_game = 1;
+                    }
+                } else if (destination_entity == EXIT_UNLOCKED) {
+                    win_game = 1;
+                } else if (
+                    destination_entity == PASSAGE_UP ||
+                    destination_entity == PASSAGE_DOWN ||
+                    destination_entity == PASSAGE_LEFT ||
+                    destination_entity == PASSAGE_RIGHT
+                ) {
+                    int correct_direction = 0;
+                    if (destination_entity == PASSAGE_UP && delta_row == -1) {
+                        correct_direction = 1;
+                    } else if (destination_entity == PASSAGE_DOWN && delta_row == 1) {
+                        correct_direction = 1;
+                    } else if (destination_entity == PASSAGE_LEFT && delta_col == -1) {
+                        correct_direction = 1;
+                    } else if (destination_entity == PASSAGE_RIGHT && delta_col == 1) {
+                        correct_direction = 1;
+                    }
+
+                    if (correct_direction) {
+                        should_add_segment = 1;
+                        board[new_row][new_col].entity = BODY_SEGMENT;
+                    } else {
+                        lose_game = 1;
+                    }
+                } else {
+                    should_add_segment = 1;
+
+                    if (destination_entity == APPLE_NORMAL) {
+                        apple_value = 5;
+                        apples_eaten++;
+                        apples_remaining--;
+                        points += apple_value;
+                        points_remaining_total -= apple_value;
+                    } else if (destination_entity == APPLE_REVERSE) {
+                        apple_value = 10;
+                        apples_eaten++;
+                        apples_remaining--;
+                        points += apple_value;
+                        points_remaining_total -= apple_value;
+                        consumed_reverse = 1;
+                    } else if (destination_entity == APPLE_SPLIT) {
+                        apple_value = 20;
+                        apples_eaten++;
+                        apples_remaining--;
+                        points += apple_value;
+                        points_remaining_total -= apple_value;
+                        consumed_split = 1;
+                    }
+
+                    if (points_remaining_total < 0) {
+                        points_remaining_total = 0;
+                    }
+
+                    board[new_row][new_col].entity = BODY_SEGMENT;
                 }
-
-                if (points_remaining_total < 0) {
-                    points_remaining_total = 0;
-                }
-
-                board[new_row][new_col].entity = BODY_SEGMENT;
             }
         }
 
@@ -677,6 +822,48 @@ void remove_tail_segments(
     }
 
     *snake_length = new_length;
+}
+
+void copy_board(
+    struct tile source[ROWS][COLS],
+    struct tile destination[ROWS][COLS]
+) {
+    for (int row = 0; row < ROWS; row++) {
+        for (int col = 0; col < COLS; col++) {
+            destination[row][col] = source[row][col];
+        }
+    }
+}
+
+int find_portal_partner(
+    int portal_pair_rows[][2],
+    int portal_pair_cols[][2],
+    int portal_pair_count,
+    int row,
+    int col,
+    int *partner_row,
+    int *partner_col
+) {
+    for (int index = 0; index < portal_pair_count; index++) {
+        if (
+            portal_pair_rows[index][0] == row &&
+            portal_pair_cols[index][0] == col
+        ) {
+            *partner_row = portal_pair_rows[index][1];
+            *partner_col = portal_pair_cols[index][1];
+            return 1;
+        }
+        if (
+            portal_pair_rows[index][1] == row &&
+            portal_pair_cols[index][1] == col
+        ) {
+            *partner_row = portal_pair_rows[index][0];
+            *partner_col = portal_pair_cols[index][0];
+            return 1;
+        }
+    }
+
+    return 0;
 }
 
 
